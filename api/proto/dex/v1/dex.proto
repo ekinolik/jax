@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package dex.v1;
+
+option go_package = "github.com/ekinolik/jax/api/proto/dex/v1;dexv1";
+
+// DexService provides endpoints for delta exposure calculations
+service DexService {
+  // GetDex returns the delta exposure calculations for given parameters
+  rpc GetDex(GetDexRequest) returns (GetDexResponse) {}
+}
+
+// GetDexRequest represents the request parameters
+message GetDexRequest {
+  string underlying_asset = 1;  // Required
+  optional double start_strike_price = 2;  // Optional
+  optional double end_strike_price = 3;    // Optional
+}
+
+// GetDexResponse represents the response structure
+message GetDexResponse {
+  double spot_price = 1;
+  map<string, ExpirationDateMap> strike_prices = 2;
+}
+
+// ExpirationDateMap represents the nested structure for expiration dates
+message ExpirationDateMap {
+  map<string, OptionTypeMap> expiration_dates = 1;
+}
+
+// OptionTypeMap represents the nested structure for option types
+message OptionTypeMap {
+  map<string, DexValue> option_types = 1;
+}
+
+// DexValue represents the final DEX value
+message DexValue {
+  double value = 1;
+} 
