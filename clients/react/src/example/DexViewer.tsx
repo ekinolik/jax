@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useJaxClient } from '../client';
-import { GetDexResponse } from '../generated/dex_pb';
+import { GetDexResponse, ExpirationDateMap, OptionTypeMap, DexValue } from '../generated/dex/v1/dex_pb';
 
 interface DexViewerProps {
   host: string;
@@ -60,13 +60,13 @@ export const DexViewer: React.FC<DexViewerProps> = ({
       <h2>DEX Data for {underlyingAsset}</h2>
       <p>Spot Price: {data.getSpotPrice()}</p>
       <div>
-        {Object.entries(data.getStrikePricesMap().toObject()).map(([strike, expDates]) => (
+        {Array.from(data.getStrikePricesMap().entries()).map(([strike, expDates]) => (
           <div key={strike}>
             <h3>Strike: {strike}</h3>
-            {Object.entries(expDates.getExpirationDatesMap().toObject()).map(([date, optTypes]) => (
+            {Array.from(expDates.getExpirationDatesMap().entries()).map(([date, optTypes]) => (
               <div key={date}>
                 <h4>Expiration: {date}</h4>
-                {Object.entries(optTypes.getOptionTypesMap().toObject()).map(([type, dex]) => (
+                {Array.from(optTypes.getOptionTypesMap().entries()).map(([type, dex]) => (
                   <div key={type}>
                     {type}: {dex.getValue()}
                   </div>

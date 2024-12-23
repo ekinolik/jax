@@ -23,3 +23,7 @@ go.work.sum
 
 # env file
 .env
+
+clients/react/dist/
+clients/react/node_modules/
+clients/reach/.DS_Store

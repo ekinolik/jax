@@ -1,6 +1,6 @@
 import { grpc } from '@improbable-eng/grpc-web';
-import { DexService } from './generated/dex_pb_service';
-import { GetDexRequest, GetDexResponse } from './generated/dex_pb';
+import { DexServiceClient } from './generated/dex/v1/DexServiceClientPb';
+import { GetDexRequest, GetDexResponse } from './generated/dex/v1/dex_pb';
 
 export interface DexOptions {
   host: string;
@@ -13,37 +13,24 @@ export interface GetDexParams {
 }
 
 export class JaxClient {
-  private host: string;
+  private client: DexServiceClient;
 
   constructor(options: DexOptions) {
-    this.host = options.host;
+    this.client = new DexServiceClient(options.host);
   }
 
   getDex(params: GetDexParams): Promise<GetDexResponse> {
-    return new Promise((resolve, reject) => {
-      const request = new GetDexRequest();
-      request.setUnderlyingAsset(params.underlyingAsset);
-      
-      if (params.startStrikePrice !== undefined) {
-        request.setStartStrikePrice(params.startStrikePrice);
-      }
-      if (params.endStrikePrice !== undefined) {
-        request.setEndStrikePrice(params.endStrikePrice);
-      }
+    const request = new GetDexRequest();
+    request.setUnderlyingAsset(params.underlyingAsset);
+    
+    if (params.startStrikePrice !== undefined) {
+      request.setStartStrikePrice(params.startStrikePrice);
+    }
+    if (params.endStrikePrice !== undefined) {
+      request.setEndStrikePrice(params.endStrikePrice);
+    }
 
-      grpc.unary(DexService.GetDex, {
-        request,
-        host: this.host,
-        onEnd: (response) => {
-          const { status, statusMessage, message } = response;
-          if (status === grpc.Code.OK && message) {
-            resolve(message as GetDexResponse);
-          } else {
-            reject(new Error(statusMessage));
-          }
-        },
-      });
-    });
+    return this.client.getDex(request);
   }
 }
 

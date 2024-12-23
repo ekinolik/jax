@@ -4,24 +4,25 @@
   "description": "React client for JAX (Options Delta Exposure) service",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "browser": true,
   "scripts": {
     "build": "tsc",
-    "prepare": "npm run build"
+    "prepare": "npm run generate && npm run build",
+    "generate": "protoc -I=../../api/proto ../../api/proto/dex/v1/dex.proto --js_out=import_style=commonjs:src/generated --grpc-web_out=import_style=commonjs+dts,mode=grpcwebtext:src/generated"
   },
   "dependencies": {
-    "@grpc/grpc-js": "^1.10.1",
     "@improbable-eng/grpc-web": "^0.15.0",
     "google-protobuf": "^3.21.2"
   },
   "devDependencies": {
     "@types/google-protobuf": "^3.15.12",
-    "@types/improbable-eng__grpc-web": "^0.13.4",
     "@types/node": "^20.11.24",
     "@types/react": "^18.2.61",
-    "ts-protoc-gen": "^0.15.0",
     "typescript": "^5.3.3"
   },
   "peerDependencies": {
-    "react": ">=16.8.0"
+    "react": ">=16.8.0",
+    "@improbable-eng/grpc-web": "^0.15.0",
+    "google-protobuf": "^3.21.2"
   }
-} 
+}
