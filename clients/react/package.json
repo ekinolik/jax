@@ -1,0 +1,27 @@
+{
+  "name": "@ekinolik/jax-client",
+  "version": "1.0.0",
+  "description": "React client for JAX (Options Delta Exposure) service",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.10.1",
+    "@improbable-eng/grpc-web": "^0.15.0",
+    "google-protobuf": "^3.21.2"
+  },
+  "devDependencies": {
+    "@types/google-protobuf": "^3.15.12",
+    "@types/improbable-eng__grpc-web": "^0.13.4",
+    "@types/node": "^20.11.24",
+    "@types/react": "^18.2.61",
+    "ts-protoc-gen": "^0.15.0",
+    "typescript": "^5.3.3"
+  },
+  "peerDependencies": {
+    "react": ">=16.8.0"
+  }
+} 
