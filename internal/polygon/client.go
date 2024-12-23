@@ -9,11 +9,16 @@ import (
 	"github.com/polygon-io/client-go/rest/models"
 )
 
-type Chain map[string]map[string]map[string]models.OptionContractSnapshot
+type Chain map[string]map[models.Date]map[string]models.OptionContractSnapshot
+
+// PolygonAPI defines the interface for Polygon.io API operations
+type PolygonAPI interface {
+	ListOptionsChainSnapshot(context.Context, *models.ListOptionsChainParams, ...models.RequestOption) *iter.Iter[models.OptionContractSnapshot]
+}
 
 type Client struct {
 	apiKey string
-	client *polygonrest.Client
+	client PolygonAPI
 }
 
 func NewClient(apiKey string) *Client {
@@ -36,47 +41,29 @@ func (c *Client) GetOptionData(underlyingAsset string, startStrike, endStrike *f
 	}
 
 	iter := c.client.ListOptionsChainSnapshot(context.Background(), params)
-	chains, err := createChains(iter)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	// Get the first contract's underlying price (they should all be the same)
-	var spotPrice float64
-	for _, expirations := range chains {
-		for _, contracts := range expirations {
-			for _, contract := range contracts {
-				spotPrice = contract.UnderlyingAsset.Price
-				goto FOUND_PRICE
-			}
-		}
-	}
-FOUND_PRICE:
-
-	return spotPrice, chains, nil
-}
-
-func createChains(chainIter *iter.Iter[models.OptionContractSnapshot]) (Chain, error) {
 	chains := make(Chain)
 
-	for chainIter.Next() {
-		current := chainIter.Item()
-		exp := current.Details.ExpirationDate
-		expDateByte, _ := exp.MarshalJSON()
-		expDate := string(expDateByte[1 : len(expDateByte)-1])
-
+	var spotPrice float64
+	for iter.Next() {
+		current := iter.Item()
 		strikePrice := strconv.FormatFloat(current.Details.StrikePrice, 'f', -1, 64)
 		contractType := current.Details.ContractType
+		expDate := current.Details.ExpirationDate
 
 		if _, ok := chains[strikePrice]; !ok {
-			chains[strikePrice] = map[string]map[string]models.OptionContractSnapshot{}
+			chains[strikePrice] = map[models.Date]map[string]models.OptionContractSnapshot{}
 		}
 		if _, ok := chains[strikePrice][expDate]; !ok {
 			chains[strikePrice][expDate] = map[string]models.OptionContractSnapshot{}
 		}
 
 		chains[strikePrice][expDate][contractType] = current
+		spotPrice = current.UnderlyingAsset.Price
 	}
 
-	return chains, chainIter.Err()
+	if err := iter.Err(); err != nil {
+		return 0, nil, err
+	}
+
+	return spotPrice, chains, nil
 }
