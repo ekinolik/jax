@@ -1,3 +1,6 @@
 [submodule "api/proto"]
 	path = api/proto
 	url = https://github.com/ekinolik/jax-protos
+[submodule "clients/react"]
+	path = clients/react
+	url = https://github.com/ekinolik/jax-react-client
