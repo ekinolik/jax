@@ -2,11 +2,14 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"log"
 	"time"
 
 	dexv1 "github.com/ekinolik/jax/api/proto/dex/v1"
 	"github.com/ekinolik/jax/internal/polygon"
 	"github.com/polygon-io/client-go/rest/models"
+	"google.golang.org/grpc/status"
 )
 
 type DexService struct {
@@ -21,23 +24,37 @@ func NewDexService(polygonClient *polygon.Client) *DexService {
 }
 
 func (s *DexService) GetDex(ctx context.Context, req *dexv1.GetDexRequest) (*dexv1.GetDexResponse, error) {
+	// Log request
+	reqJSON, _ := json.Marshal(map[string]interface{}{
+		"underlyingAsset":  req.UnderlyingAsset,
+		"startStrikePrice": req.StartStrikePrice,
+		"endStrikePrice":   req.EndStrikePrice,
+	})
+	log.Printf("[REQUEST] GetDex - %s", string(reqJSON))
+
 	// Extract strike price range
 	startStrike, endStrike := s.extractStrikePriceRange(req)
 
 	// Fetch option data from Polygon
 	spotPrice, chains, err := s.polygonClient.GetOptionData(req.UnderlyingAsset, startStrike, endStrike)
 	if err != nil {
+		st := status.Convert(err)
+		log.Printf("[ERROR] GetDex failed - code: %v, message: %v", st.Code(), st.Message())
 		return nil, err
 	}
 
 	// Process chains into response format
 	strikePrices := s.processOptionChains(chains)
 
-	// Build and return response
+	// Build response
 	response := &dexv1.GetDexResponse{
 		SpotPrice:    spotPrice,
 		StrikePrices: strikePrices,
 	}
+
+	// Log response status
+	log.Printf("[RESPONSE] GetDex successful - spot price: %v, strike prices count: %d",
+		spotPrice, len(strikePrices))
 
 	return response, nil
 }
