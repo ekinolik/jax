@@ -32,4 +32,6 @@ clients/reach/.DS_Store
 
 grpcurl-test-commands.sh
 
+bin/
+
 *~
