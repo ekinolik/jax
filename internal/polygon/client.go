@@ -2,9 +2,11 @@ package polygon
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
-	polygonrest "github.com/polygon-io/client-go/rest"
+	"github.com/ekinolik/jax/internal/config"
+	polygon "github.com/polygon-io/client-go/rest"
 	"github.com/polygon-io/client-go/rest/iter"
 	"github.com/polygon-io/client-go/rest/models"
 )
@@ -17,14 +19,12 @@ type PolygonAPI interface {
 }
 
 type Client struct {
-	apiKey string
-	client PolygonAPI
+	client *polygon.Client
 }
 
-func NewClient(apiKey string) *Client {
+func NewClient(cfg *config.Config) *Client {
 	return &Client{
-		apiKey: apiKey,
-		client: polygonrest.New(apiKey),
+		client: polygon.New(cfg.PolygonAPIKey),
 	}
 }
 
@@ -66,4 +66,12 @@ func (c *Client) GetOptionData(underlyingAsset string, startStrike, endStrike *f
 	}
 
 	return spotPrice, chains, nil
+}
+
+func (c *Client) GetLastTrade(ctx context.Context, params *models.GetLastTradeParams) (*models.GetLastTradeResponse, error) {
+	res, err := c.client.GetLastTrade(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("polygon API error: %w", err)
+	}
+	return res, nil
 }

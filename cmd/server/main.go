@@ -6,6 +6,7 @@ import (
 	"net"
 
 	dexv1 "github.com/ekinolik/jax/api/proto/dex/v1"
+	marketv1 "github.com/ekinolik/jax/api/proto/market/v1"
 	"github.com/ekinolik/jax/internal/config"
 	"github.com/ekinolik/jax/internal/service"
 	"google.golang.org/grpc"
@@ -33,11 +34,13 @@ func main() {
 	}
 
 	dexService := service.NewDexService(cfg)
+	marketService := service.NewMarketService(cfg)
 
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(connectionInterceptor),
 	)
 	dexv1.RegisterDexServiceServer(grpcServer, dexService)
+	marketv1.RegisterMarketServiceServer(grpcServer, marketService)
 	reflection.Register(grpcServer)
 
 	log.Printf("Starting gRPC server on %s", cfg.GRPCHost)

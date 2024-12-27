@@ -57,7 +57,7 @@ func (s *DexService) GetDex(ctx context.Context, req *dexv1.GetDexRequest) (*dex
 	// Add cache expiration to response metadata
 	if cacheEntry := s.client.GetCacheEntry(req.UnderlyingAsset); cacheEntry != nil {
 		grpc.SetHeader(ctx, metadata.Pairs(
-			"cache-expires-at", fmt.Sprintf("%d", cacheEntry.Timestamp.Add(s.client.GetCacheTTL()).Unix()),
+			"cache-expires-at", fmt.Sprintf("%d", cacheEntry.ExpiresAt.Unix()),
 		))
 	}
 
