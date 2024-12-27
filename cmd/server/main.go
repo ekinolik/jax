@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"net"
+	"os"
+	"time"
 
 	dexv1 "github.com/ekinolik/jax/api/proto/dex/v1"
 	marketv1 "github.com/ekinolik/jax/api/proto/market/v1"
@@ -12,14 +14,45 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 )
 
-// connectionInterceptor logs new connections
-func connectionInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+func init() {
+	// Configure logging
+	log.SetFlags(log.Ldate | log.Ltime | log.LUTC)
+	log.SetOutput(os.Stdout)
+}
+
+// loggingInterceptor logs all gRPC method calls
+func loggingInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	start := time.Now()
+	clientIP := "unknown"
 	if p, ok := peer.FromContext(ctx); ok {
-		log.Printf("[CONNECTION] New connection from %s", p.Addr.String())
+		clientIP = p.Addr.String()
 	}
-	return handler(ctx, req)
+
+	// Log the request
+	log.Printf("[gRPC] %s - client_ip=%s method=%s request=%+v",
+		"REQUEST", clientIP, info.FullMethod, req)
+
+	// Call the handler
+	resp, err := handler(ctx, req)
+
+	// Calculate duration
+	duration := time.Since(start)
+
+	if err != nil {
+		st, _ := status.FromError(err)
+		log.Printf("[gRPC] %s - client_ip=%s method=%s code=%s message=%q duration=%s",
+			"ERROR", clientIP, info.FullMethod, st.Code(), st.Message(), duration)
+		return nil, err
+	}
+
+	// Log the response
+	log.Printf("[gRPC] %s - client_ip=%s method=%s duration=%s",
+		"SUCCESS", clientIP, info.FullMethod, duration)
+
+	return resp, nil
 }
 
 func main() {
@@ -37,7 +70,7 @@ func main() {
 	marketService := service.NewMarketService(cfg)
 
 	grpcServer := grpc.NewServer(
-		grpc.UnaryInterceptor(connectionInterceptor),
+		grpc.UnaryInterceptor(loggingInterceptor),
 	)
 	dexv1.RegisterDexServiceServer(grpcServer, dexService)
 	marketv1.RegisterMarketServiceServer(grpcServer, marketService)

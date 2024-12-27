@@ -29,3 +29,7 @@ go.work.sum
 clients/react/dist/
 clients/react/node_modules/
 clients/reach/.DS_Store
+
+grpcurl-test-commands.sh
+
+*~
