@@ -7,7 +7,6 @@ import (
 	"os"
 
 	dexv1 "github.com/ekinolik/jax/api/proto/dex/v1"
-	"github.com/ekinolik/jax/internal/polygon"
 	"github.com/ekinolik/jax/internal/service"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/peer"
@@ -33,8 +32,7 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	polygonClient := polygon.NewClient(apiKey)
-	dexService := service.NewDexService(polygonClient)
+	dexService := service.NewDexService(apiKey)
 
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(connectionInterceptor),

@@ -3,23 +3,27 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	dexv1 "github.com/ekinolik/jax/api/proto/dex/v1"
 	"github.com/ekinolik/jax/internal/polygon"
 	"github.com/polygon-io/client-go/rest/models"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
 type DexService struct {
 	dexv1.UnimplementedDexServiceServer
-	polygonClient *polygon.Client
+	client *polygon.CachedClient
 }
 
-func NewDexService(polygonClient *polygon.Client) *DexService {
+func NewDexService(apiKey string) *DexService {
 	return &DexService{
-		polygonClient: polygonClient,
+		client: polygon.NewCachedClient(apiKey),
 	}
 }
 
@@ -32,24 +36,28 @@ func (s *DexService) GetDex(ctx context.Context, req *dexv1.GetDexRequest) (*dex
 	})
 	log.Printf("[REQUEST] GetDex - %s", string(reqJSON))
 
-	// Extract strike price range
-	startStrike, endStrike := s.extractStrikePriceRange(req)
-
-	// Fetch option data from Polygon
-	spotPrice, chains, err := s.polygonClient.GetOptionData(req.UnderlyingAsset, startStrike, endStrike)
+	// Fetch all option data from Polygon (without strike price filters)
+	spotPrice, chains, err := s.client.GetOptionData(req.UnderlyingAsset, nil, nil)
 	if err != nil {
 		st := status.Convert(err)
 		log.Printf("[ERROR] GetDex failed - code: %v, message: %v", st.Code(), st.Message())
 		return nil, err
 	}
 
-	// Process chains into response format
-	strikePrices := s.processOptionChains(chains)
+	// Process chains into response format, filtering by strike price range
+	strikePrices := s.processOptionChains(chains, req.StartStrikePrice, req.EndStrikePrice)
 
 	// Build response
 	response := &dexv1.GetDexResponse{
 		SpotPrice:    spotPrice,
 		StrikePrices: strikePrices,
+	}
+
+	// Add cache expiration to response metadata
+	if cacheEntry := s.client.GetCacheEntry(req.UnderlyingAsset); cacheEntry != nil {
+		grpc.SetHeader(ctx, metadata.Pairs(
+			"cache-expires-at", fmt.Sprintf("%d", cacheEntry.Timestamp.Add(s.client.GetCacheTTL()).Unix()),
+		))
 	}
 
 	// Log response status
@@ -59,23 +67,24 @@ func (s *DexService) GetDex(ctx context.Context, req *dexv1.GetDexRequest) (*dex
 	return response, nil
 }
 
-// extractStrikePriceRange extracts the strike price range from the request
-func (s *DexService) extractStrikePriceRange(req *dexv1.GetDexRequest) (*float64, *float64) {
-	var startStrike, endStrike *float64
-	if req.StartStrikePrice != nil {
-		startStrike = req.StartStrikePrice
-	}
-	if req.EndStrikePrice != nil {
-		endStrike = req.EndStrikePrice
-	}
-	return startStrike, endStrike
-}
-
 // processOptionChains converts the polygon chains into the response format
-func (s *DexService) processOptionChains(chains polygon.Chain) map[string]*dexv1.ExpirationDateMap {
+func (s *DexService) processOptionChains(chains polygon.Chain, startStrike, endStrike *float64) map[string]*dexv1.ExpirationDateMap {
 	strikePrices := make(map[string]*dexv1.ExpirationDateMap)
 
 	for strike, expirations := range chains {
+		strikePrice, err := strconv.ParseFloat(strike, 64)
+		if err != nil {
+			continue
+		}
+
+		// Filter strikes based on range
+		if startStrike != nil && strikePrice < *startStrike {
+			continue
+		}
+		if endStrike != nil && strikePrice > *endStrike {
+			continue
+		}
+
 		strikePrices[strike] = s.processExpirationDates(expirations)
 	}
 
