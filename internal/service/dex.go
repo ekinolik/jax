@@ -9,6 +9,7 @@ import (
 	"time"
 
 	dexv1 "github.com/ekinolik/jax/api/proto/dex/v1"
+	"github.com/ekinolik/jax/internal/config"
 	"github.com/ekinolik/jax/internal/polygon"
 	"github.com/polygon-io/client-go/rest/models"
 	"google.golang.org/grpc"
@@ -21,9 +22,9 @@ type DexService struct {
 	client *polygon.CachedClient
 }
 
-func NewDexService(apiKey string) *DexService {
+func NewDexService(cfg *config.Config) *DexService {
 	return &DexService{
-		client: polygon.NewCachedClient(apiKey),
+		client: polygon.NewCachedClient(cfg),
 	}
 }
 

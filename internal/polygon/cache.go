@@ -3,6 +3,8 @@ package polygon
 import (
 	"sync"
 	"time"
+
+	"github.com/ekinolik/jax/internal/config"
 )
 
 type CacheEntry struct {
@@ -18,11 +20,11 @@ type CachedClient struct {
 	cacheTTL time.Duration
 }
 
-func NewCachedClient(apiKey string) *CachedClient {
+func NewCachedClient(cfg *config.Config) *CachedClient {
 	return &CachedClient{
-		client:   NewClient(apiKey),
+		client:   NewClient(cfg.PolygonAPIKey),
 		cache:    make(map[string]CacheEntry),
-		cacheTTL: 15 * time.Minute,
+		cacheTTL: cfg.CacheTTL,
 	}
 }
 

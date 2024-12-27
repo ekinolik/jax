@@ -4,9 +4,9 @@ import (
 	"context"
 	"log"
 	"net"
-	"os"
 
 	dexv1 "github.com/ekinolik/jax/api/proto/dex/v1"
+	"github.com/ekinolik/jax/internal/config"
 	"github.com/ekinolik/jax/internal/service"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/peer"
@@ -22,17 +22,17 @@ func connectionInterceptor(ctx context.Context, req interface{}, info *grpc.Unar
 }
 
 func main() {
-	apiKey := os.Getenv("POLYGON_API_KEY")
-	if apiKey == "" {
-		log.Fatal("POLYGON_API_KEY environment variable is required")
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	lis, err := net.Listen("tcp", ":50051")
+	lis, err := net.Listen("tcp", cfg.GRPCHost)
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	dexService := service.NewDexService(apiKey)
+	dexService := service.NewDexService(cfg)
 
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(connectionInterceptor),
@@ -40,7 +40,7 @@ func main() {
 	dexv1.RegisterDexServiceServer(grpcServer, dexService)
 	reflection.Register(grpcServer)
 
-	log.Printf("Starting gRPC server on :50051")
+	log.Printf("Starting gRPC server on %s", cfg.GRPCHost)
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)
 	}
