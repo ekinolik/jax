@@ -21,17 +21,19 @@ type OptionDataEntry struct {
 }
 
 type CachedClient struct {
-	client    *Client
-	cache     map[string]CacheEntry
-	cacheLock sync.RWMutex
-	cacheTTL  time.Duration
+	client         *Client
+	cache          map[string]CacheEntry
+	cacheLock      sync.RWMutex
+	dexCacheTTL    time.Duration
+	marketCacheTTL time.Duration
 }
 
 func NewCachedClient(cfg *config.Config) *CachedClient {
 	return &CachedClient{
-		client:   NewClient(cfg),
-		cache:    make(map[string]CacheEntry),
-		cacheTTL: 15 * time.Minute,
+		client:         NewClient(cfg),
+		cache:          make(map[string]CacheEntry),
+		dexCacheTTL:    cfg.DexCacheTTL,
+		marketCacheTTL: cfg.MarketCacheTTL,
 	}
 }
 
@@ -65,7 +67,7 @@ func (c *CachedClient) GetOptionData(underlying string, startStrike, endStrike *
 	c.cacheLock.Lock()
 	c.cache[cacheKey] = CacheEntry{
 		Data:      data,
-		ExpiresAt: time.Now().Add(c.cacheTTL),
+		ExpiresAt: time.Now().Add(c.dexCacheTTL),
 	}
 	c.cacheLock.Unlock()
 
@@ -121,13 +123,17 @@ func (c *CachedClient) GetLastTrade(ticker string) (*LastTradeResponse, bool, er
 	c.cacheLock.Lock()
 	c.cache[cacheKey] = CacheEntry{
 		Data:      lastTrade,
-		ExpiresAt: time.Now().Add(c.cacheTTL),
+		ExpiresAt: time.Now().Add(c.marketCacheTTL),
 	}
 	c.cacheLock.Unlock()
 
 	return lastTrade, false, nil
 }
 
-func (c *CachedClient) GetCacheTTL() time.Duration {
-	return c.cacheTTL
+func (c *CachedClient) GetDexCacheTTL() time.Duration {
+	return c.dexCacheTTL
+}
+
+func (c *CachedClient) GetMarketCacheTTL() time.Duration {
+	return c.marketCacheTTL
 }

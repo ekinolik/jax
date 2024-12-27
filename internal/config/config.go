@@ -27,8 +27,9 @@ type Config struct {
 	// Polygon configuration
 	PolygonAPIKey string
 
-	// Cache configuration
-	CacheTTL time.Duration
+	// Service-specific cache TTLs
+	DexCacheTTL    time.Duration
+	MarketCacheTTL time.Duration
 
 	// Environment
 	Env Environment
@@ -74,16 +75,28 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("POLYGON_API_KEY is required")
 	}
 
-	// Load cache configuration
-	cacheTTL := os.Getenv("JAX_CACHE_TTL")
-	if cacheTTL == "" {
-		config.CacheTTL = 15 * time.Minute // Default cache TTL
+	// Load DEX cache configuration
+	dexCacheTTL := os.Getenv("JAX_DEX_CACHE_TTL")
+	if dexCacheTTL == "" {
+		config.DexCacheTTL = 15 * time.Minute // Default DEX cache TTL
 	} else {
-		duration, err := time.ParseDuration(cacheTTL)
+		duration, err := time.ParseDuration(dexCacheTTL)
 		if err != nil {
-			return nil, fmt.Errorf("invalid cache TTL duration: %s", cacheTTL)
+			return nil, fmt.Errorf("invalid DEX cache TTL duration: %s", dexCacheTTL)
 		}
-		config.CacheTTL = duration
+		config.DexCacheTTL = duration
+	}
+
+	// Load Market cache configuration
+	marketCacheTTL := os.Getenv("JAX_MARKET_CACHE_TTL")
+	if marketCacheTTL == "" {
+		config.MarketCacheTTL = time.Second // Default market cache TTL
+	} else {
+		duration, err := time.ParseDuration(marketCacheTTL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid market cache TTL duration: %s", marketCacheTTL)
+		}
+		config.MarketCacheTTL = duration
 	}
 
 	return config, nil

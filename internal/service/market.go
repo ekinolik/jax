@@ -43,7 +43,7 @@ func (s *MarketService) GetLastTrade(ctx context.Context, req *marketv1.GetLastT
 	// Set cache metadata
 	header := metadata.Pairs(
 		"x-cache-hit", fmt.Sprintf("%v", cacheHit),
-		"x-cache-ttl", "900", // 15 minutes
+		"x-cache-ttl", fmt.Sprintf("%d", int(s.client.GetMarketCacheTTL().Seconds())),
 	)
 	grpc.SetHeader(ctx, header)
 
