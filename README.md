@@ -91,3 +91,25 @@ The response includes:
   }
 }
 ```
+
+## Caching Strategy
+
+The service implements an efficient caching mechanism to minimize API calls to Polygon.io:
+
+### Cache Implementation
+- In-memory cache with 15-minute TTL
+- Caches full option chain data per underlying asset
+- Thread-safe implementation using mutex locks
+- Cache expiration time is communicated to clients
+
+### Cache Behavior
+- First request for an asset fetches all strike prices
+- Subsequent requests for the same asset use cached data
+- Strike price filtering is performed post-cache
+- Cache is cleared on server restart
+
+### Benefits
+- Reduced Polygon.io API calls
+- Lower latency for cached responses
+- Efficient memory usage
+- Support for multiple strike ranges from single cache entry
