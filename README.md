@@ -2,6 +2,24 @@
 
 JAX is a gRPC service that calculates delta exposure (DEX) for options using data from Polygon.io.
 
+## Available Methods
+
+### DexService
+1. `GetDex`: Returns DEX data for a range of strike prices
+   - Input: `underlyingAsset` (required), `startStrikePrice` (optional), `endStrikePrice` (optional)
+   - Returns DEX data for all strikes within the specified range
+
+2. `GetDexByStrikes`: Returns DEX data for a specified number of strikes around the spot price
+   - Input: `underlyingAsset` (required), `numStrikes` (required)
+   - Returns DEX data for N strikes centered around the spot price
+   - For even numbers, returns one more strike above spot price than below
+   - Adjusts if not enough strikes are available in either direction
+
+### MarketService
+1. `GetLastTrade`: Returns the most recent trade data for a ticker
+   - Input: `ticker` (required)
+   - Returns price, size, timestamp, and exchange information
+
 ## Prerequisites
 
 - Go 1.21 or later

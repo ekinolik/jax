@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
+	"sort"
 	"strconv"
 	"time"
 
@@ -63,6 +65,97 @@ func (s *DexService) GetDex(ctx context.Context, req *dexv1.GetDexRequest) (*dex
 
 	// Log response status
 	log.Printf("[RESPONSE] GetDex successful - spot price: %v, strike prices count: %d",
+		spotPrice, len(strikePrices))
+
+	return response, nil
+}
+
+func (s *DexService) GetDexByStrikes(ctx context.Context, req *dexv1.GetDexByStrikesRequest) (*dexv1.GetDexResponse, error) {
+	// Log request
+	reqJSON, _ := json.Marshal(map[string]interface{}{
+		"underlyingAsset": req.UnderlyingAsset,
+		"numStrikes":      req.NumStrikes,
+	})
+	log.Printf("[REQUEST] GetDexByStrikes - %s", string(reqJSON))
+
+	// Fetch all option data from Polygon (without strike price filters)
+	spotPrice, chains, err := s.client.GetOptionData(req.UnderlyingAsset, nil, nil)
+	if err != nil {
+		st := status.Convert(err)
+		log.Printf("[ERROR] GetDexByStrikes failed - code: %v, message: %v", st.Code(), st.Message())
+		return nil, err
+	}
+
+	// Convert all strikes to float64 and sort them
+	var strikes []float64
+	for strike := range chains {
+		strikePrice, err := strconv.ParseFloat(strike, 64)
+		if err != nil {
+			continue
+		}
+		strikes = append(strikes, strikePrice)
+	}
+	sort.Float64s(strikes)
+
+	// Find the index of the closest strike to spot price
+	spotIndex := 0
+	minDiff := math.Abs(strikes[0] - spotPrice)
+	for i, strike := range strikes {
+		diff := math.Abs(strike - spotPrice)
+		if diff < minDiff {
+			minDiff = diff
+			spotIndex = i
+		}
+	}
+
+	// Calculate the range of strikes to include
+	numStrikes := int(req.NumStrikes)
+	strikesBelow := (numStrikes - 1) / 2
+	strikesAbove := numStrikes - strikesBelow // This will be (n+1)/2 for odd numbers, and n/2 + 1 for even numbers
+	startIndex := spotIndex - strikesBelow
+	endIndex := spotIndex + strikesAbove - 1 // Subtract 1 since we want to include the spot price only once
+
+	// Adjust indices if they're out of bounds
+	if startIndex < 0 {
+		// Not enough strikes below, try to get more from above
+		extraNeeded := -startIndex
+		startIndex = 0
+		endIndex = min(len(strikes)-1, endIndex+extraNeeded)
+	}
+	if endIndex >= len(strikes) {
+		// Not enough strikes above, try to get more from below
+		extraNeeded := endIndex - (len(strikes) - 1)
+		endIndex = len(strikes) - 1
+		startIndex = max(0, startIndex-extraNeeded)
+	}
+
+	// Filter chains to only include the selected strikes
+	filteredChains := make(polygon.Chain)
+	for i := startIndex; i <= endIndex; i++ {
+		strikeStr := strconv.FormatFloat(strikes[i], 'f', -1, 64)
+		if expirations, ok := chains[strikeStr]; ok {
+			filteredChains[strikeStr] = expirations
+		}
+	}
+
+	// Process chains into response format
+	strikePrices := s.processOptionChains(filteredChains, nil, nil)
+
+	// Build response
+	response := &dexv1.GetDexResponse{
+		SpotPrice:    spotPrice,
+		StrikePrices: strikePrices,
+	}
+
+	// Add cache expiration to response metadata
+	if cacheEntry := s.client.GetCacheEntry(req.UnderlyingAsset); cacheEntry != nil {
+		grpc.SetHeader(ctx, metadata.Pairs(
+			"cache-expires-at", fmt.Sprintf("%d", cacheEntry.ExpiresAt.Unix()),
+		))
+	}
+
+	// Log response status
+	log.Printf("[RESPONSE] GetDexByStrikes successful - spot price: %v, strike prices count: %d",
 		spotPrice, len(strikePrices))
 
 	return response, nil
@@ -130,4 +223,18 @@ func formatExpirationDate(date models.Date) string {
 // calculateDelta calculates the delta exposure for a single option contract
 func calculateDelta(contract models.OptionContractSnapshot) float64 {
 	return contract.OpenInterest * float64(contract.Details.SharesPerContract) * contract.Greeks.Delta * contract.UnderlyingAsset.Price
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
