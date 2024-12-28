@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -32,12 +31,11 @@ func NewDexService(cfg *config.Config) *DexService {
 
 func (s *DexService) GetDex(ctx context.Context, req *dexv1.GetDexRequest) (*dexv1.GetDexResponse, error) {
 	// Log request
-	reqJSON, _ := json.Marshal(map[string]interface{}{
+	LogRequest("GetDex", map[string]interface{}{
 		"underlyingAsset":  req.UnderlyingAsset,
 		"startStrikePrice": req.StartStrikePrice,
 		"endStrikePrice":   req.EndStrikePrice,
 	})
-	log.Printf("[REQUEST] GetDex - %s", string(reqJSON))
 
 	// Fetch all option data from Polygon (without strike price filters)
 	spotPrice, chains, err := s.client.GetOptionData(req.UnderlyingAsset, nil, nil)
@@ -72,11 +70,10 @@ func (s *DexService) GetDex(ctx context.Context, req *dexv1.GetDexRequest) (*dex
 
 func (s *DexService) GetDexByStrikes(ctx context.Context, req *dexv1.GetDexByStrikesRequest) (*dexv1.GetDexResponse, error) {
 	// Log request
-	reqJSON, _ := json.Marshal(map[string]interface{}{
+	LogRequest("GetDexByStrikes", map[string]interface{}{
 		"underlyingAsset": req.UnderlyingAsset,
 		"numStrikes":      req.NumStrikes,
 	})
-	log.Printf("[REQUEST] GetDexByStrikes - %s", string(reqJSON))
 
 	// Fetch all option data from Polygon (without strike price filters)
 	spotPrice, chains, err := s.client.GetOptionData(req.UnderlyingAsset, nil, nil)
