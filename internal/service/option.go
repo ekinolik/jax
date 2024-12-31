@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	dexv1 "github.com/ekinolik/jax/api/proto/dex/v1"
+	optionv1 "github.com/ekinolik/jax/api/proto/option/v1"
 	"github.com/ekinolik/jax/internal/config"
 	"github.com/ekinolik/jax/internal/polygon"
 	"github.com/polygon-io/client-go/rest/models"
@@ -18,18 +18,18 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type DexService struct {
-	dexv1.UnimplementedDexServiceServer
+type OptionService struct {
+	optionv1.UnimplementedOptionServiceServer
 	client *polygon.CachedClient
 }
 
-func NewDexService(cfg *config.Config) *DexService {
-	return &DexService{
+func NewOptionService(cfg *config.Config) *OptionService {
+	return &OptionService{
 		client: polygon.NewCachedClient(cfg),
 	}
 }
 
-func (s *DexService) GetDex(ctx context.Context, req *dexv1.GetDexRequest) (*dexv1.GetDexResponse, error) {
+func (s *OptionService) GetDex(ctx context.Context, req *optionv1.GetDexRequest) (*optionv1.GetDexResponse, error) {
 	// Log request
 	LogRequest("GetDex", map[string]interface{}{
 		"underlyingAsset":  req.UnderlyingAsset,
@@ -49,7 +49,7 @@ func (s *DexService) GetDex(ctx context.Context, req *dexv1.GetDexRequest) (*dex
 	strikePrices := s.processOptionChains(chains, req.StartStrikePrice, req.EndStrikePrice)
 
 	// Build response
-	response := &dexv1.GetDexResponse{
+	response := &optionv1.GetDexResponse{
 		SpotPrice:    spotPrice,
 		StrikePrices: strikePrices,
 	}
@@ -68,7 +68,7 @@ func (s *DexService) GetDex(ctx context.Context, req *dexv1.GetDexRequest) (*dex
 	return response, nil
 }
 
-func (s *DexService) GetDexByStrikes(ctx context.Context, req *dexv1.GetDexByStrikesRequest) (*dexv1.GetDexResponse, error) {
+func (s *OptionService) GetDexByStrikes(ctx context.Context, req *optionv1.GetDexByStrikesRequest) (*optionv1.GetDexResponse, error) {
 	// Log request
 	LogRequest("GetDexByStrikes", map[string]interface{}{
 		"underlyingAsset": req.UnderlyingAsset,
@@ -139,7 +139,7 @@ func (s *DexService) GetDexByStrikes(ctx context.Context, req *dexv1.GetDexByStr
 	strikePrices := s.processOptionChains(filteredChains, nil, nil)
 
 	// Build response
-	response := &dexv1.GetDexResponse{
+	response := &optionv1.GetDexResponse{
 		SpotPrice:    spotPrice,
 		StrikePrices: strikePrices,
 	}
@@ -159,8 +159,8 @@ func (s *DexService) GetDexByStrikes(ctx context.Context, req *dexv1.GetDexByStr
 }
 
 // processOptionChains converts the polygon chains into the response format
-func (s *DexService) processOptionChains(chains polygon.Chain, startStrike, endStrike *float64) map[string]*dexv1.ExpirationDateMap {
-	strikePrices := make(map[string]*dexv1.ExpirationDateMap)
+func (s *OptionService) processOptionChains(chains polygon.Chain, startStrike, endStrike *float64) map[string]*optionv1.ExpirationDateMap {
+	strikePrices := make(map[string]*optionv1.ExpirationDateMap)
 
 	for strike, expirations := range chains {
 		strikePrice, err := strconv.ParseFloat(strike, 64)
@@ -183,9 +183,9 @@ func (s *DexService) processOptionChains(chains polygon.Chain, startStrike, endS
 }
 
 // processExpirationDates processes all expiration dates for a strike price
-func (s *DexService) processExpirationDates(expirations map[models.Date]map[string]models.OptionContractSnapshot) *dexv1.ExpirationDateMap {
-	expDateMap := &dexv1.ExpirationDateMap{
-		ExpirationDates: make(map[string]*dexv1.OptionTypeMap),
+func (s *OptionService) processExpirationDates(expirations map[models.Date]map[string]models.OptionContractSnapshot) *optionv1.ExpirationDateMap {
+	expDateMap := &optionv1.ExpirationDateMap{
+		ExpirationDates: make(map[string]*optionv1.OptionTypeMap),
 	}
 
 	for expDate, contracts := range expirations {
@@ -197,14 +197,14 @@ func (s *DexService) processExpirationDates(expirations map[models.Date]map[stri
 }
 
 // processOptionTypes processes all option types for an expiration date
-func (s *DexService) processOptionTypes(contracts map[string]models.OptionContractSnapshot) *dexv1.OptionTypeMap {
-	optionTypeMap := &dexv1.OptionTypeMap{
-		OptionTypes: make(map[string]*dexv1.DexValue),
+func (s *OptionService) processOptionTypes(contracts map[string]models.OptionContractSnapshot) *optionv1.OptionTypeMap {
+	optionTypeMap := &optionv1.OptionTypeMap{
+		OptionTypes: make(map[string]*optionv1.DexValue),
 	}
 
 	for optType, contract := range contracts {
 		dex := calculateDelta(contract)
-		optionTypeMap.OptionTypes[optType] = &dexv1.DexValue{
+		optionTypeMap.OptionTypes[optType] = &optionv1.DexValue{
 			Value: dex,
 		}
 	}

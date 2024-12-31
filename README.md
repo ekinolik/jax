@@ -4,7 +4,7 @@ JAX is a gRPC service that calculates delta exposure (DEX) for options using dat
 
 ## Available Methods
 
-### DexService
+### OptionService
 1. `GetDex`: Returns DEX data for a range of strike prices
    - Input: `underlyingAsset` (required), `startStrikePrice` (optional), `endStrikePrice` (optional)
    - Returns DEX data for all strikes within the specified range
@@ -76,10 +76,10 @@ Use grpcurl to query the service. Example:
 
 ```bash
 # Get DEX for AAPL options between strike prices 170 and 180
-grpcurl -plaintext -d '{"underlyingAsset": "AAPL", "startStrikePrice": 170, "endStrikePrice": 180}' localhost:50051 dex.v1.DexService/GetDex
+grpcurl -plaintext -d '{"underlyingAsset": "AAPL", "startStrikePrice": 170, "endStrikePrice": 180}' localhost:50051 jax.v1.OptionService/GetDex
 
 # Get DEX for all AAPL options (no strike price filter)
-grpcurl -plaintext -d '{"underlyingAsset": "AAPL"}' localhost:50051 dex.v1.DexService/GetDex
+grpcurl -plaintext -d '{"underlyingAsset": "AAPL"}' localhost:50051 jax.v1.OptionService/GetDex
 ```
 
 The response includes:

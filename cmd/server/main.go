@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	dexv1 "github.com/ekinolik/jax/api/proto/dex/v1"
 	marketv1 "github.com/ekinolik/jax/api/proto/market/v1"
+	optionv1 "github.com/ekinolik/jax/api/proto/option/v1"
 	"github.com/ekinolik/jax/internal/config"
 	"github.com/ekinolik/jax/internal/service"
 	"google.golang.org/grpc"
@@ -66,13 +66,13 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	dexService := service.NewDexService(cfg)
+	optionService := service.NewOptionService(cfg)
 	marketService := service.NewMarketService(cfg)
 
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(loggingInterceptor),
 	)
-	dexv1.RegisterDexServiceServer(grpcServer, dexService)
+	optionv1.RegisterOptionServiceServer(grpcServer, optionService)
 	marketv1.RegisterMarketServiceServer(grpcServer, marketService)
 	reflection.Register(grpcServer)
 

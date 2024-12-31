@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	dexv1 "github.com/ekinolik/jax/api/proto/dex/v1"
+	jaxv1 "github.com/ekinolik/jax/api/proto/option/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -12,7 +12,7 @@ import (
 // Client represents a JAX service client
 type Client struct {
 	conn   *grpc.ClientConn
-	client dexv1.DexServiceClient
+	client jaxv1.OptionServiceClient
 }
 
 // NewClient creates a new JAX service client
@@ -24,7 +24,7 @@ func NewClient(address string) (*Client, error) {
 
 	return &Client{
 		conn:   conn,
-		client: dexv1.NewDexServiceClient(conn),
+		client: jaxv1.NewOptionServiceClient(conn),
 	}, nil
 }
 
@@ -34,8 +34,8 @@ func (c *Client) Close() error {
 }
 
 // GetDex retrieves delta exposure calculations for the given parameters
-func (c *Client) GetDex(ctx context.Context, underlyingAsset string, startStrike, endStrike *float64) (*dexv1.GetDexResponse, error) {
-	req := &dexv1.GetDexRequest{
+func (c *Client) GetDex(ctx context.Context, underlyingAsset string, startStrike, endStrike *float64) (*jaxv1.GetDexResponse, error) {
+	req := &jaxv1.GetDexRequest{
 		UnderlyingAsset:  underlyingAsset,
 		StartStrikePrice: startStrike,
 		EndStrikePrice:   endStrike,
