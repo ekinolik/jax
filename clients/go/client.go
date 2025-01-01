@@ -43,3 +43,34 @@ func (c *Client) GetDex(ctx context.Context, underlyingAsset string, startStrike
 
 	return c.client.GetDex(ctx, req)
 }
+
+// GetDexByStrikes retrieves delta exposure calculations for a specified number of strikes around the spot price
+func (c *Client) GetDexByStrikes(ctx context.Context, underlyingAsset string, numStrikes int32) (*jaxv1.GetDexResponse, error) {
+	req := &jaxv1.GetDexByStrikesRequest{
+		UnderlyingAsset: underlyingAsset,
+		NumStrikes:      numStrikes,
+	}
+
+	return c.client.GetDexByStrikes(ctx, req)
+}
+
+// GetGex retrieves gamma exposure calculations for the given parameters
+func (c *Client) GetGex(ctx context.Context, underlyingAsset string, startStrike, endStrike *float64) (*jaxv1.GetDexResponse, error) {
+	req := &jaxv1.GetDexRequest{
+		UnderlyingAsset:  underlyingAsset,
+		StartStrikePrice: startStrike,
+		EndStrikePrice:   endStrike,
+	}
+
+	return c.client.GetGex(ctx, req)
+}
+
+// GetGexByStrikes retrieves gamma exposure calculations for a specified number of strikes around the spot price
+func (c *Client) GetGexByStrikes(ctx context.Context, underlyingAsset string, numStrikes int32) (*jaxv1.GetDexResponse, error) {
+	req := &jaxv1.GetDexByStrikesRequest{
+		UnderlyingAsset: underlyingAsset,
+		NumStrikes:      numStrikes,
+	}
+
+	return c.client.GetGexByStrikes(ctx, req)
+}

@@ -1,6 +1,6 @@
-# JAX - Options Delta Exposure Service
+# JAX - Options Delta and Gamma Exposure Service
 
-JAX is a gRPC service that calculates delta exposure (DEX) for options using data from Polygon.io.
+JAX is a gRPC service that calculates delta exposure (DEX) and gamma exposure (GEX) for options using data from Polygon.io.
 
 ## Available Methods
 
@@ -12,6 +12,16 @@ JAX is a gRPC service that calculates delta exposure (DEX) for options using dat
 2. `GetDexByStrikes`: Returns DEX data for a specified number of strikes around the spot price
    - Input: `underlyingAsset` (required), `numStrikes` (required)
    - Returns DEX data for N strikes centered around the spot price
+   - For even numbers, returns one more strike above spot price than below
+   - Adjusts if not enough strikes are available in either direction
+
+3. `GetGex`: Returns GEX data for a range of strike prices
+   - Input: `underlyingAsset` (required), `startStrikePrice` (optional), `endStrikePrice` (optional)
+   - Returns GEX data for all strikes within the specified range
+
+4. `GetGexByStrikes`: Returns GEX data for a specified number of strikes around the spot price
+   - Input: `underlyingAsset` (required), `numStrikes` (required)
+   - Returns GEX data for N strikes centered around the spot price
    - For even numbers, returns one more strike above spot price than below
    - Adjusts if not enough strikes are available in either direction
 
@@ -80,11 +90,17 @@ grpcurl -plaintext -d '{"underlyingAsset": "AAPL", "startStrikePrice": 170, "end
 
 # Get DEX for all AAPL options (no strike price filter)
 grpcurl -plaintext -d '{"underlyingAsset": "AAPL"}' localhost:50051 jax.v1.OptionService/GetDex
+
+# Get GEX for AAPL options between strike prices 170 and 180
+grpcurl -plaintext -d '{"underlyingAsset": "AAPL", "startStrikePrice": 170, "endStrikePrice": 180}' localhost:50051 jax.v1.OptionService/GetGex
+
+# Get GEX for 5 strikes around spot price for AAPL
+grpcurl -plaintext -d '{"underlyingAsset": "AAPL", "numStrikes": 5}' localhost:50051 jax.v1.OptionService/GetGexByStrikes
 ```
 
 The response includes:
 - `spotPrice`: Current price of the underlying asset
-- `strikePrices`: Map of strike prices to expiration dates and option types, with DEX values
+- `strikePrices`: Map of strike prices to expiration dates and option types, with DEX or GEX values
 
 ## Response Structure
 
