@@ -184,9 +184,9 @@ const client = new JaxClient({
   host: 'localhost:50051',
   useTLS: true,
   certPaths: {
-    ca: '../certs/ca/ca.crt',
-    cert: '../certs/client/client.crt',
-    key: '../certs/client/client.key'
+    ca: '../certs/ca.crt',
+    cert: '../certs/client.crt',
+    key: '../certs/client.key'
   }
 });
 ```
