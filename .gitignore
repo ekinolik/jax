@@ -35,3 +35,10 @@ grpcurl-test-commands.sh
 bin/
 
 *~
+
+certs/
+client-certs/
+*.crt
+*.key
+*.pem
+clients/react/test/integration/certs/

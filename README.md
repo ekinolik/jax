@@ -147,3 +147,95 @@ The service implements an efficient caching mechanism to minimize API calls to P
 - Lower latency for cached responses
 - Efficient memory usage
 - Support for multiple strike ranges from single cache entry
+
+## Authentication
+
+The server uses mutual TLS (mTLS) authentication. This means both the server and clients need certificates signed by a trusted Certificate Authority (CA).
+
+### Generating Certificates
+
+1. Run the certificate generation script:
+```bash
+chmod +x scripts/generate-certs.sh
+./scripts/generate-certs.sh
+```
+
+This will create the following files in the `certs` directory:
+- `ca/ca.key`: CA private key
+- `ca/ca.crt`: CA certificate
+- `server/server.key`: Server private key
+- `server/server.crt`: Server certificate
+- `client/client.key`: Client private key
+- `client/client.crt`: Client certificate
+
+### Server Configuration
+
+The server is automatically configured to use mTLS. It will look for the certificates in the following locations:
+- `certs/ca/ca.crt`: CA certificate to verify client certificates
+- `certs/server/server.key`: Server private key
+- `certs/server/server.crt`: Server certificate
+
+### Client Configuration
+
+When creating a new JaxClient instance, provide the certificate paths:
+
+```typescript
+const client = new JaxClient({
+  host: 'localhost:50051',
+  useTLS: true,
+  certPaths: {
+    ca: '../certs/ca/ca.crt',
+    cert: '../certs/client/client.crt',
+    key: '../certs/client/client.key'
+  }
+});
+```
+
+### Security Notes
+
+1. Keep private keys secure and never commit them to version control
+2. In production, use a proper Certificate Authority
+3. Regularly rotate certificates
+4. Set appropriate file permissions (the script sets 600 for private keys)
+
+### Generating Client Certificates
+
+For clients that need to connect to the server, you can generate client certificates using the provided script:
+
+```bash
+# Generate certificates for a client named "alice"
+./scripts/generate-client-cert.sh alice
+
+# Generate certificates for a client named "bob"
+./scripts/generate-client-cert.sh bob
+```
+
+This will create a directory `client-certs/<client-name>` containing:
+- `ca.crt`: The CA certificate (public)
+- `client.crt`: The client's certificate (public)
+- `client.key`: The client's private key (keep secure)
+
+These files should be securely transferred to the client and used to initialize their connection. The client should keep their private key secure and never share it.
+
+For React clients using the `@ekinolik/jax-react-client` package, copy these files to their project and initialize the client with:
+
+```typescript
+const client = new JaxClient({
+  host: 'your-server:50051',
+  useTLS: true,
+  certPaths: {
+    ca: './path/to/ca.crt',
+    cert: './path/to/client.crt',
+    key: './path/to/client.key'
+  }
+});
+```
+
+### Security Best Practices for Client Certificates
+
+1. Generate separate certificates for each client
+2. Never share private keys between clients
+3. Use secure methods to transfer certificates to clients
+4. Regularly rotate client certificates
+5. Maintain a list of valid client certificates and revoke them when necessary
+6. Store client private keys securely, preferably in a secure secret management system
