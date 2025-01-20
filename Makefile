@@ -9,6 +9,16 @@ proto:
 build:
 	go build -o bin/server cmd/server/main.go
 
+.PHONY: build-production
+build-production:
+	mkdir -p bin
+	env GOOS=linux GOARCH=386 go build -v -o bin/jax-linux-386 cmd/server/main.go
+
+.PHONY: package-production
+package-production: build-production
+	mkdir -p package
+	tar -zcf package/jax-linux-386.tar.gz bin/jax-linux-386 scripts/
+
 .PHONY: run
 run:
 	go run cmd/server/main.go 

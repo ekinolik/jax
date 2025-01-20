@@ -91,6 +91,16 @@ func (s *OptionService) getExposure(
 			}
 			strikes = append(strikes, strikePrice)
 		}
+
+		// If no valid strikes are found, return empty response
+		if len(strikes) == 0 {
+			log.Printf("[WARN] %s - no valid strikes found for %s", method, underlyingAsset)
+			return &optionv1.GetDexResponse{
+				SpotPrice:    spotPrice,
+				StrikePrices: make(map[string]*optionv1.ExpirationDateMap),
+			}, nil
+		}
+
 		sort.Float64s(strikes)
 
 		// Find the index of the closest strike to spot price
