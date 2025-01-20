@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"runtime"
 	"time"
 
 	marketv1 "github.com/ekinolik/jax/api/proto/market/v1"
@@ -16,6 +17,7 @@ import (
 	"github.com/ekinolik/jax/internal/config"
 	"github.com/ekinolik/jax/internal/service"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
@@ -89,6 +91,41 @@ func loggingInterceptor(ctx context.Context, req interface{}, info *grpc.UnarySe
 	return resp, nil
 }
 
+// recoveryInterceptor recovers from panics and converts them to gRPC errors
+func recoveryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			// Get stack trace
+			buf := make([]byte, 64<<10)
+			n := runtime.Stack(buf, false)
+			stackTrace := string(buf[:n])
+
+			log.Printf("[PANIC] method=%s request=%+v\npanic=%v\n%s",
+				info.FullMethod,
+				req,
+				r,
+				stackTrace)
+			err = status.Errorf(codes.Internal, "Internal server error")
+		}
+	}()
+	return handler(ctx, req)
+}
+
+// chainInterceptors creates a single interceptor from multiple interceptors
+func chainInterceptors(interceptors ...grpc.UnaryServerInterceptor) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		chain := handler
+		for i := len(interceptors) - 1; i >= 0; i-- {
+			chain = func(currentInter grpc.UnaryServerInterceptor, currentHandler grpc.UnaryHandler) grpc.UnaryHandler {
+				return func(currentCtx context.Context, currentReq interface{}) (interface{}, error) {
+					return currentInter(currentCtx, currentReq, info, currentHandler)
+				}
+			}(interceptors[i], chain)
+		}
+		return chain(ctx, req)
+	}
+}
+
 func main() {
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -106,10 +143,10 @@ func main() {
 		log.Fatalf("failed to load TLS credentials: %v", err)
 	}
 
-	// Create gRPC server with TLS
+	// Create gRPC server with TLS and interceptors
 	s := grpc.NewServer(
 		grpc.Creds(tlsCredentials),
-		grpc.UnaryInterceptor(loggingInterceptor),
+		grpc.UnaryInterceptor(chainInterceptors(recoveryInterceptor, loggingInterceptor)),
 	)
 
 	// Register services
