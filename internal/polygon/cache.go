@@ -137,3 +137,45 @@ func (c *CachedClient) GetDexCacheTTL() time.Duration {
 func (c *CachedClient) GetMarketCacheTTL() time.Duration {
 	return c.marketCacheTTL
 }
+
+type AggregatesResponse struct {
+	Results  []models.Agg
+	CachedAt time.Time
+}
+
+func (c *CachedClient) GetAggregates(ticker string, multiplier int, timespan string, from, to int64, adjusted bool) (*AggregatesResponse, bool, error) {
+	cacheKey := fmt.Sprintf("aggregates:%s:%d:%s:%d:%d:%t", ticker, multiplier, timespan, from, to, adjusted)
+
+	// Check cache
+	c.cacheLock.RLock()
+	if entry, ok := c.cache[cacheKey]; ok {
+		if time.Now().Before(entry.ExpiresAt) {
+			if aggs, ok := entry.Data.(*AggregatesResponse); ok {
+				c.cacheLock.RUnlock()
+				return aggs, true, nil
+			}
+		}
+	}
+	c.cacheLock.RUnlock()
+
+	// Fetch from Polygon
+	aggs, err := c.client.GetAggregates(context.Background(), ticker, multiplier, timespan, from, to, adjusted)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to get aggregates from Polygon: %w", err)
+	}
+
+	// Cache the response
+	response := &AggregatesResponse{
+		Results:  aggs,
+		CachedAt: time.Now(),
+	}
+
+	c.cacheLock.Lock()
+	c.cache[cacheKey] = CacheEntry{
+		Data:      response,
+		ExpiresAt: time.Now().Add(c.marketCacheTTL),
+	}
+	c.cacheLock.Unlock()
+
+	return response, false, nil
+}
