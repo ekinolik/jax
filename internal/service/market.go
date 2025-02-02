@@ -9,6 +9,7 @@ import (
 	marketv1 "github.com/ekinolik/jax/api/proto/market/v1"
 	"github.com/ekinolik/jax/internal/config"
 	"github.com/ekinolik/jax/internal/polygon"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
@@ -63,8 +64,23 @@ func (s *MarketService) GetAggregates(ctx context.Context, req *marketv1.GetAggr
 		"adjusted":   req.Adjusted,
 	})
 
+	// Parse date strings
+	fromTime, err := time.Parse("2006-01-02", req.From)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid from date format: %v", err)
+	}
+
+	toTime, err := time.Parse("2006-01-02", req.To)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid to date format: %v", err)
+	}
+
+	// Convert to Unix milliseconds
+	fromMs := fromTime.UnixMilli()
+	toMs := toTime.UnixMilli()
+
 	// Get aggregates from Polygon
-	aggs, _, err := s.client.GetAggregates(req.Ticker, int(req.Multiplier), req.Timespan, req.From, req.To, req.Adjusted)
+	aggs, _, err := s.client.GetAggregates(req.Ticker, int(req.Multiplier), req.Timespan, fromMs, toMs, req.Adjusted)
 	if err != nil {
 		st := status.Convert(err)
 		log.Printf("[ERROR] GetAggregates failed - code: %v, message: %v", st.Code(), st.Message())
