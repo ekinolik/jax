@@ -31,6 +31,11 @@ type Config struct {
 	DexCacheTTL    time.Duration
 	MarketCacheTTL time.Duration
 
+	// Cache limits
+	MemoryCacheLimit int64
+	DiskCacheLimit   int64
+	CacheDir         string
+
 	// Environment
 	Env Environment
 }
@@ -97,6 +102,35 @@ func LoadConfig() (*Config, error) {
 			return nil, fmt.Errorf("invalid market cache TTL duration: %s", marketCacheTTL)
 		}
 		config.MarketCacheTTL = duration
+	}
+
+	// Load cache limits
+	memLimit := os.Getenv("JAX_MEMORY_CACHE_LIMIT")
+	if memLimit == "" {
+		config.MemoryCacheLimit = 50 * 1024 * 1024 // Default 50MB
+	} else {
+		limit, err := strconv.ParseInt(memLimit, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid memory cache limit: %s", memLimit)
+		}
+		config.MemoryCacheLimit = limit
+	}
+
+	diskLimit := os.Getenv("JAX_DISK_CACHE_LIMIT")
+	if diskLimit == "" {
+		config.DiskCacheLimit = 2 * 1024 * 1024 * 1024 // Default 2GB
+	} else {
+		limit, err := strconv.ParseInt(diskLimit, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid disk cache limit: %s", diskLimit)
+		}
+		config.DiskCacheLimit = limit
+	}
+
+	// Load cache directory
+	config.CacheDir = os.Getenv("JAX_CACHE_DIR")
+	if config.CacheDir == "" {
+		config.CacheDir = "cache" // Default cache directory
 	}
 
 	return config, nil
