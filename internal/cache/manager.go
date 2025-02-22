@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/ekinolik/jax/internal/config"
+	"github.com/ekinolik/jax/internal/polygon"
+	"github.com/polygon-io/client-go/rest/models"
 )
 
 const (
@@ -19,11 +21,12 @@ const (
 	DiskCacheLimit     = 2 * 1024 * 1024 * 1024 // 2GB
 )
 
-type CacheType int
+// CacheType represents the type of cache (memory or disk)
+type CacheType string
 
 const (
-	MemoryCache CacheType = iota
-	DiskCache
+	MemoryCache CacheType = "memory"
+	DiskCache   CacheType = "disk"
 )
 
 type RetryConfig struct {
@@ -59,13 +62,6 @@ type TimedTask struct {
 	Times       []time.Time // Daily times to run
 	RunWeekends bool
 	Task        CacheTask
-	lastRun     time.Time // Track when the task last ran
-}
-
-// taskQueueEntry represents a task waiting to be executed
-type taskQueueEntry struct {
-	task      *CacheTask
-	scheduled time.Time
 }
 
 // scheduledTask represents a unified task that can be either interval or timed
@@ -111,15 +107,39 @@ type TaskErrorStats struct {
 	nextRetryTime       time.Time
 }
 
+// LastTradeData wraps the last trade response
+type LastTradeData struct {
+	Trade     *polygon.LastTradeResponse
+	FromCache bool
+}
+
+// OptionData wraps the option data response
+type OptionData struct {
+	SpotPrice float64
+	Chain     polygon.Chain
+}
+
+// AggregatesData wraps the aggregates data response
+type AggregatesData struct {
+	Results   []models.Agg
+	FromCache bool
+	CachedAt  time.Time
+}
+
+// PolygonClient defines the interface for interacting with Polygon API
+type PolygonClient interface {
+	GetLastTrade(symbol string) (*polygon.LastTradeResponse, bool, error)
+	GetOptionData(symbol string, strike, expiry *float64) (float64, polygon.Chain, error)
+	GetAggregates(symbol string, multiplier int, timespan string, from, to int64, adjusted bool) (*polygon.AggregatesResponse, bool, error)
+}
+
 // CacheManager manages different types of caches
 type CacheManager struct {
-	client      interface{} // The client that makes actual API calls
+	client      PolygonClient // The client that makes actual API calls
 	memoryLimit int64
 	diskLimit   int64
 	memoryUsage atomic.Int64
-	diskUsage   atomic.Int64
 	stopChan    chan struct{}
-	wg          sync.WaitGroup
 	timezone    *time.Location
 
 	// Caches
@@ -148,7 +168,7 @@ type CacheEntry struct {
 }
 
 // NewCacheManager creates a new cache manager
-func NewCacheManager(cfg *config.Config, client interface{}) (*CacheManager, error) {
+func NewCacheManager(cfg *config.Config, client PolygonClient) (*CacheManager, error) {
 	tz, err := time.LoadLocation("America/Los_Angeles")
 	if err != nil {
 		return nil, fmt.Errorf("failed to load timezone: %v", err)
@@ -559,4 +579,154 @@ func (cm *CacheManager) GetTaskErrorStats(taskName string) *TaskErrorStats {
 		}
 	}
 	return nil
+}
+
+// CreateTasksFromConfig creates cache tasks from the provided configuration
+func (cm *CacheManager) CreateTasksFromConfig(config *TasksConfig) error {
+	for _, taskConfig := range config.CacheTasks {
+		// Convert retry config
+		retryDelay, err := time.ParseDuration(config.DefaultRetryConfig.RetryDelay)
+		if err != nil {
+			return fmt.Errorf("invalid retry delay: %w", err)
+		}
+
+		retryConfig := RetryConfig{
+			MaxRetries: config.DefaultRetryConfig.MaxRetries,
+			RetryDelay: retryDelay,
+			BackoffFunc: func(attempt int) time.Duration {
+				multiplier := float64(config.DefaultRetryConfig.BackoffMultiplier)
+				return time.Duration(float64(retryDelay) * math.Pow(multiplier, float64(attempt)))
+			},
+		}
+
+		// Create cache tasks for each symbol
+		for _, symbol := range taskConfig.Symbols {
+			cacheTask := CacheTask{
+				Name:        fmt.Sprintf("%s:%s", taskConfig.Name, symbol),
+				CacheType:   CacheType(taskConfig.Cache.Type),
+				SizeBytes:   taskConfig.Cache.SizeBytes,
+				Key:         fmt.Sprintf("%s:%s", taskConfig.Name, symbol),
+				Compression: taskConfig.Cache.Compression,
+				RetryConfig: retryConfig,
+			}
+
+			// Set the update function based on the function type
+			switch taskConfig.Function {
+			case "GetLastTrade":
+				cacheTask.UpdateFunc = func() (interface{}, error) {
+					trade, fromCache, err := cm.client.GetLastTrade(symbol)
+					if err != nil {
+						return nil, err
+					}
+					return &LastTradeData{
+						Trade:     trade,
+						FromCache: fromCache,
+					}, nil
+				}
+
+			case "GetOptionData":
+				cacheTask.UpdateFunc = func() (interface{}, error) {
+					spotPrice, chain, err := cm.client.GetOptionData(symbol, nil, nil)
+					if err != nil {
+						return nil, err
+					}
+					return &OptionData{
+						SpotPrice: spotPrice,
+						Chain:     chain,
+					}, nil
+				}
+
+			case "GetAggregates":
+				if taskConfig.FunctionArgs == nil {
+					return fmt.Errorf("function args required for GetAggregates")
+				}
+				cacheTask.UpdateFunc = func() (interface{}, error) {
+					now := time.Now()
+					yesterday := now.Add(-24 * time.Hour)
+					from := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, time.UTC).Unix()
+					to := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 23, 59, 59, 0, time.UTC).Unix()
+
+					response, fromCache, err := cm.client.GetAggregates(
+						symbol,
+						taskConfig.FunctionArgs.Multiplier,
+						taskConfig.FunctionArgs.Timespan,
+						from,
+						to,
+						taskConfig.FunctionArgs.Adjusted,
+					)
+					if err != nil {
+						return nil, fmt.Errorf("failed to get aggregates for %s: %w", symbol, err)
+					}
+
+					return &AggregatesData{
+						Results:   response.Results,
+						FromCache: fromCache,
+						CachedAt:  response.CachedAt,
+					}, nil
+				}
+			}
+
+			// Create the appropriate task type
+			if taskConfig.Type == "interval" {
+				interval, err := time.ParseDuration(taskConfig.Interval)
+				if err != nil {
+					return fmt.Errorf("invalid interval for task %s: %w", taskConfig.Name, err)
+				}
+
+				intervalTask := &IntervalTask{
+					Name:     cacheTask.Name,
+					Interval: interval,
+					Task:     cacheTask,
+				}
+
+				// Set start and end times if specified
+				if taskConfig.StartTime != "" {
+					startTime, err := parseTimeOfDay(taskConfig.StartTime)
+					if err != nil {
+						return fmt.Errorf("invalid start time for task %s: %w", taskConfig.Name, err)
+					}
+					intervalTask.StartTime = startTime
+				}
+				if taskConfig.EndTime != "" {
+					endTime, err := parseTimeOfDay(taskConfig.EndTime)
+					if err != nil {
+						return fmt.Errorf("invalid end time for task %s: %w", taskConfig.Name, err)
+					}
+					intervalTask.EndTime = endTime
+				}
+
+				cm.AddIntervalTask(intervalTask)
+
+			} else if taskConfig.Type == "timed" {
+				times := make([]time.Time, len(taskConfig.Times))
+				for i, t := range taskConfig.Times {
+					parsedTime, err := parseTimeOfDay(t)
+					if err != nil {
+						return fmt.Errorf("invalid time for task %s: %w", taskConfig.Name, err)
+					}
+					times[i] = parsedTime
+				}
+
+				timedTask := &TimedTask{
+					Name:        cacheTask.Name,
+					Times:       times,
+					RunWeekends: taskConfig.RunWeekends,
+					Task:        cacheTask,
+				}
+
+				cm.AddTimedTask(timedTask)
+			}
+		}
+	}
+
+	return nil
+}
+
+// parseTimeOfDay parses a time string in "HH:MM" format
+func parseTimeOfDay(timeStr string) (time.Time, error) {
+	t, err := time.Parse("15:04", timeStr)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Date(0, 1, 1, t.Hour(), t.Minute(), 0, 0, time.UTC), nil
 }
