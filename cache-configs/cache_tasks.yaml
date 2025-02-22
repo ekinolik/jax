@@ -22,8 +22,8 @@ cache_tasks:
     function: GetOptionData
     interval: 30m
     start_time: "06:00"  # Market pre-open
-    end_time: "13:00"    # Market close
-    run_weekends: false
+    end_time: "14:00"    # Market close
+    run_weekends: true
     cache:
       type: disk
       size_bytes: 1048576  # 1MB per symbol
@@ -41,7 +41,7 @@ cache_tasks:
     times:
       - "09:00"  # Morning update
       - "16:30"  # After market close
-    run_weekends: false
+    run_weekends: true
     function_args:
       multiplier: 1
       timespan: "minute"

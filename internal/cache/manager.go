@@ -159,6 +159,9 @@ type CacheManager struct {
 	// Error handling
 	taskErrors     map[string]*TaskErrorStats
 	errorStatsLock sync.RWMutex
+
+	// Debug stats
+	activeExecutions sync.Map // map[string]time.Time - tracks currently executing tasks
 }
 
 type CacheEntry struct {
@@ -223,6 +226,27 @@ func (cm *CacheManager) Start() {
 	// Initialize executors
 	cm.executorWg.Add(cm.numExecutors + 1) // +1 for the scheduler
 
+	// Log initial state
+	log.Printf("Cache Manager Starting - Memory Limit: %d bytes, Disk Limit: %d bytes, Executors: %d",
+		cm.memoryLimit, cm.diskLimit, cm.numExecutors)
+	log.Printf("Current Memory Usage: %d bytes (%.2f%%)",
+		cm.memoryUsage.Load(), float64(cm.memoryUsage.Load())/float64(cm.memoryLimit)*100)
+	log.Printf("Current Disk Usage: %d bytes (%.2f%%)",
+		cm.diskCache.GetUsage(), float64(cm.diskCache.GetUsage())/float64(cm.diskLimit)*100)
+
+	// Execute all tasks immediately on startup
+	log.Printf("Executing all tasks on startup...")
+	cm.taskLock.RLock()
+	for _, task := range cm.tasks {
+		select {
+		case cm.taskQueue <- task:
+			log.Printf("Queued initial execution of task: %s", task.task.Name)
+		default:
+			log.Printf("Warning: Task queue is full, could not queue initial execution of task: %s", task.task.Name)
+		}
+	}
+	cm.taskLock.RUnlock()
+
 	// Start the task scheduler
 	go cm.runTaskScheduler()
 
@@ -231,7 +255,8 @@ func (cm *CacheManager) Start() {
 		go cm.runExecutor()
 	}
 
-	log.Printf("Started cache manager with %d executors", cm.numExecutors)
+	// Start debug logging goroutine
+	go cm.logDebugStats()
 }
 
 // Stop stops the cache manager
@@ -479,47 +504,76 @@ func (cm *CacheManager) handleTaskFailure(taskName string, err error) {
 
 // executeTask executes a cache task with retries
 func (cm *CacheManager) executeTask(task *CacheTask) {
+	// Track execution start
+	cm.activeExecutions.Store(task.Name, time.Now())
+	defer cm.activeExecutions.Delete(task.Name)
+
+	log.Printf("[Task %s] Starting execution", task.Name)
+
 	// Check circuit breaker
 	if !cm.canExecuteTask(task.Name) {
-		log.Printf("Circuit breaker open for task %s, skipping execution", task.Name)
+		log.Printf("[Task %s] Circuit breaker open, skipping execution", task.Name)
 		return
 	}
 
 	var attempt int
 	var lastErr error
+	startTime := time.Now()
 
 	for attempt = 0; attempt <= task.RetryConfig.MaxRetries; attempt++ {
 		if attempt > 0 {
 			delay := task.RetryConfig.BackoffFunc(attempt)
+			log.Printf("[Task %s] Retrying (attempt %d/%d) after %v delay",
+				task.Name, attempt+1, task.RetryConfig.MaxRetries+1, delay)
 			time.Sleep(delay)
 		}
+
+		attemptStart := time.Now()
+		log.Printf("[Task %s] Executing update function (attempt %d/%d)",
+			task.Name, attempt+1, task.RetryConfig.MaxRetries+1)
 
 		data, err := task.UpdateFunc()
 		if err != nil {
 			lastErr = err
-			log.Printf("Failed to execute task %s (attempt %d/%d): %v",
-				task.Name, attempt+1, task.RetryConfig.MaxRetries+1, err)
+			log.Printf("[Task %s] Update function failed (attempt %d/%d): %v (took %v)",
+				task.Name, attempt+1, task.RetryConfig.MaxRetries+1, err, time.Since(attemptStart))
 			continue
 		}
+		log.Printf("[Task %s] Update function completed successfully (took %v)",
+			task.Name, time.Since(attemptStart))
 
 		// Cache the data
+		cacheStart := time.Now()
+		log.Printf("[Task %s] Starting to cache data (%s cache, %d bytes, compression: %v)",
+			task.Name, task.CacheType, task.SizeBytes, task.Compression)
+
 		if err := cm.cacheData(task, data); err != nil {
 			lastErr = err
-			log.Printf("Failed to cache data for task %s: %v", task.Name, err)
+			log.Printf("[Task %s] Failed to cache data: %v (cache operation took %v)",
+				task.Name, err, time.Since(cacheStart))
 			continue
 		}
+		log.Printf("[Task %s] Successfully cached data (cache operation took %v)",
+			task.Name, time.Since(cacheStart))
 
 		// Reset error stats on success
 		cm.resetErrorStats(task.Name)
+		log.Printf("[Task %s] Task completed successfully (total time: %v)",
+			task.Name, time.Since(startTime))
 		return // Success
 	}
 
 	// Handle final failure
+	log.Printf("[Task %s] Task failed permanently after %d attempts (total time: %v): %v",
+		task.Name, attempt, time.Since(startTime), lastErr)
 	cm.handleTaskFailure(task.Name, lastErr)
 }
 
 // cacheData stores data in the appropriate cache
 func (cm *CacheManager) cacheData(task *CacheTask, data interface{}) error {
+	log.Printf("Caching data for task %s (type: %s, size: %d bytes, compression: %v)",
+		task.Name, task.CacheType, task.SizeBytes, task.Compression)
+
 	switch task.CacheType {
 	case MemoryCache:
 		return cm.cacheInMemory(task, data)
@@ -539,12 +593,16 @@ func (cm *CacheManager) cacheInMemory(task *CacheTask, data interface{}) error {
 	existingSize := int64(0)
 	if existing, exists := cm.memoryCache[task.Key]; exists {
 		existingSize = existing.Size
+		log.Printf("Overwriting existing memory cache entry for %s (old size: %d bytes)",
+			task.Key, existingSize)
 	}
 
 	// Check memory limits
 	newSize := task.SizeBytes
 	currentUsage := cm.memoryUsage.Load()
 	if currentUsage-existingSize+newSize > cm.memoryLimit {
+		log.Printf("Memory cache limit would be exceeded for task %s (current: %d, new: %d, limit: %d)",
+			task.Name, currentUsage, currentUsage-existingSize+newSize, cm.memoryLimit)
 		return fmt.Errorf("memory cache limit exceeded")
 	}
 
@@ -556,6 +614,8 @@ func (cm *CacheManager) cacheInMemory(task *CacheTask, data interface{}) error {
 	}
 	cm.memoryUsage.Add(newSize - existingSize)
 
+	log.Printf("Successfully cached data in memory for %s (new size: %d bytes, total usage: %d bytes)",
+		task.Key, newSize, cm.memoryUsage.Load())
 	return nil
 }
 
@@ -637,9 +697,22 @@ func (cm *CacheManager) CreateTasksFromConfig(config *TasksConfig) error {
 				}
 
 			case "GetAggregates":
-				if taskConfig.FunctionArgs == nil {
-					return fmt.Errorf("function args required for GetAggregates")
+				// Set default values if FunctionArgs is nil
+				multiplier := 1
+				timespan := "day"
+				adjusted := true
+
+				if taskConfig.FunctionArgs != nil {
+					if taskConfig.FunctionArgs.Multiplier > 0 {
+						multiplier = taskConfig.FunctionArgs.Multiplier
+					}
+					if taskConfig.FunctionArgs.Timespan != "" {
+						timespan = taskConfig.FunctionArgs.Timespan
+					}
+					adjusted = taskConfig.FunctionArgs.Adjusted
 				}
+
+				// Create closure with the values
 				cacheTask.UpdateFunc = func() (interface{}, error) {
 					now := time.Now()
 					yesterday := now.Add(-24 * time.Hour)
@@ -648,21 +721,24 @@ func (cm *CacheManager) CreateTasksFromConfig(config *TasksConfig) error {
 
 					response, fromCache, err := cm.client.GetAggregates(
 						symbol,
-						taskConfig.FunctionArgs.Multiplier,
-						taskConfig.FunctionArgs.Timespan,
+						multiplier,
+						timespan,
 						from,
 						to,
-						taskConfig.FunctionArgs.Adjusted,
+						adjusted,
 					)
 					if err != nil {
 						return nil, fmt.Errorf("failed to get aggregates for %s: %w", symbol, err)
 					}
 
-					return &AggregatesData{
+					data := &AggregatesData{
 						Results:   response.Results,
 						FromCache: fromCache,
 						CachedAt:  response.CachedAt,
-					}, nil
+					}
+
+					// Convert to cacheable format
+					return ToCacheableAggregatesData(data), nil
 				}
 			}
 
@@ -729,4 +805,54 @@ func parseTimeOfDay(timeStr string) (time.Time, error) {
 		return time.Time{}, err
 	}
 	return time.Date(0, 1, 1, t.Hour(), t.Minute(), 0, 0, time.UTC), nil
+}
+
+// logDebugStats periodically logs debug statistics
+func (cm *CacheManager) logDebugStats() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-cm.stopChan:
+			return
+		case <-ticker.C:
+			cm.taskLock.RLock()
+			numTasks := len(cm.tasks)
+			queueLen := len(cm.taskQueue)
+			cm.taskLock.RUnlock()
+
+			// Count active executions
+			activeCount := 0
+			activeTaskNames := []string{}
+			cm.activeExecutions.Range(func(key, value interface{}) bool {
+				activeCount++
+				activeTaskNames = append(activeTaskNames, key.(string))
+				return true
+			})
+
+			log.Printf("Cache Manager Stats:")
+			log.Printf("- Tasks Configured: %d", numTasks)
+			log.Printf("- Queue Length: %d/%d", queueLen, cap(cm.taskQueue))
+			log.Printf("- Active Executions: %d (%v)", activeCount, activeTaskNames)
+			log.Printf("- Memory Usage: %d/%d bytes (%.2f%%)",
+				cm.memoryUsage.Load(), cm.memoryLimit,
+				float64(cm.memoryUsage.Load())/float64(cm.memoryLimit)*100)
+			log.Printf("- Disk Usage: %d/%d bytes (%.2f%%)",
+				cm.diskCache.GetUsage(), cm.diskLimit,
+				float64(cm.diskCache.GetUsage())/float64(cm.diskLimit)*100)
+
+			// Log next scheduled runs
+			log.Printf("Next Scheduled Runs:")
+			cm.taskLock.RLock()
+			now := time.Now()
+			for name, task := range cm.tasks {
+				if !task.nextRun.IsZero() {
+					waitTime := task.nextRun.Sub(now)
+					log.Printf("- %s: %v (in %v)", name, task.nextRun.Format("15:04:05"), waitTime.Round(time.Second))
+				}
+			}
+			cm.taskLock.RUnlock()
+		}
+	}
 }

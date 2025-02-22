@@ -99,7 +99,7 @@ func LoadConfig() (*Config, error) {
 	config.CacheDir = getEnvWithDefault("JAX_CACHE_DIR", "cache")
 
 	// Load number of executors
-	numExecutors, err := getEnvIntWithDefault("JAX_NUM_EXECUTORS", 3) // Default to 3 executors
+	numExecutors, err := getEnvIntWithDefault("JAX_NUM_EXECUTORS", 1) // Default to 1 executor
 	if err != nil {
 		return nil, err
 	}

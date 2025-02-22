@@ -11,6 +11,9 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+
+	"github.com/ekinolik/jax/internal/polygon"
+	"github.com/polygon-io/client-go/rest/models"
 )
 
 // DataWrapper wraps data for gob encoding/decoding
@@ -19,13 +22,28 @@ type DataWrapper struct {
 }
 
 func init() {
-	// Register types for gob encoding/decoding
+	// Register basic types for gob encoding/decoding
 	gob.Register(map[string]interface{}{})
 	gob.Register([]interface{}{})
 	gob.Register(string(""))
 	gob.Register(int(0))
 	gob.Register(float64(0))
 	gob.Register(bool(false))
+
+	// Register our custom types
+	gob.RegisterName("LastTradeData", &LastTradeData{})
+	gob.RegisterName("OptionData", &OptionData{})
+	gob.RegisterName("AggregatesData", &AggregatesData{})
+	gob.RegisterName("CacheableAggregatesData", &CacheableAggregatesData{})
+	gob.RegisterName("CacheableAgg", &CacheableAgg{})
+	gob.RegisterName("CacheableAggSlice", []CacheableAgg{})
+
+	// Register external types
+	gob.Register(&polygon.LastTradeResponse{})
+	gob.Register(&polygon.Chain{})
+	gob.Register(models.LastTrade{})
+	gob.Register(models.Agg{})
+	gob.Register([]models.Agg{})
 }
 
 // DiskCacheManager manages disk-based caching
