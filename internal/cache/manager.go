@@ -3,6 +3,8 @@ package cache
 import (
 	"fmt"
 	"log"
+	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -78,6 +80,37 @@ type scheduledTask struct {
 	endTime     time.Time
 }
 
+// TaskErrorType represents different types of task failures
+type TaskErrorType int
+
+const (
+	ErrTaskExecution TaskErrorType = iota
+	ErrCacheStore
+	ErrRateLimit
+	ErrTimeout
+	ErrResourceExhausted
+)
+
+// TaskError wraps task-specific errors with context
+type TaskError struct {
+	TaskName string
+	ErrType  TaskErrorType
+	Err      error
+}
+
+func (e *TaskError) Error() string {
+	return fmt.Sprintf("task %s failed: %v (%v)", e.TaskName, e.ErrType, e.Err)
+}
+
+// TaskErrorStats tracks error statistics for a task
+type TaskErrorStats struct {
+	consecutiveFailures int
+	lastError           error
+	lastErrorTime       time.Time
+	circuitOpen         bool
+	nextRetryTime       time.Time
+}
+
 // CacheManager manages different types of caches
 type CacheManager struct {
 	client      interface{} // The client that makes actual API calls
@@ -102,6 +135,10 @@ type CacheManager struct {
 
 	// Task execution
 	executorWg sync.WaitGroup
+
+	// Error handling
+	taskErrors     map[string]*TaskErrorStats
+	errorStatsLock sync.RWMutex
 }
 
 type CacheEntry struct {
@@ -126,8 +163,9 @@ func NewCacheManager(cfg *config.Config, client interface{}) (*CacheManager, err
 		memoryCache:  make(map[string]*CacheEntry),
 		diskCache:    NewDiskCacheManager("cache"),
 		tasks:        make(map[string]*scheduledTask),
-		taskQueue:    make(chan *scheduledTask, 100), // Buffer of 100 to prevent blocking
+		taskQueue:    make(chan *scheduledTask, 100),
 		numExecutors: cfg.NumExecutors,
+		taskErrors:   make(map[string]*TaskErrorStats),
 	}
 
 	return cm, nil
@@ -333,8 +371,100 @@ func (cm *CacheManager) shouldRunTimedTask(task *scheduledTask, now time.Time) b
 	return false
 }
 
+// canExecuteTask checks if a task can be executed based on its error history
+func (cm *CacheManager) canExecuteTask(taskName string) bool {
+	cm.errorStatsLock.RLock()
+	defer cm.errorStatsLock.RUnlock()
+
+	stats, exists := cm.taskErrors[taskName]
+	if !exists {
+		return true
+	}
+
+	// If circuit is open, check if we should allow a retry
+	if stats.circuitOpen {
+		if time.Now().Before(stats.nextRetryTime) {
+			return false
+		}
+		// Allow a retry attempt
+		stats.circuitOpen = false
+	}
+
+	return true
+}
+
+// updateErrorStats updates error statistics for a task
+func (cm *CacheManager) updateErrorStats(taskName string, err error) {
+	cm.errorStatsLock.Lock()
+	defer cm.errorStatsLock.Unlock()
+
+	stats, exists := cm.taskErrors[taskName]
+	if !exists {
+		stats = &TaskErrorStats{}
+		cm.taskErrors[taskName] = stats
+	}
+
+	stats.consecutiveFailures++
+	stats.lastError = err
+	stats.lastErrorTime = time.Now()
+
+	// Implement circuit breaker logic
+	if stats.consecutiveFailures >= 5 { // Open circuit after 5 consecutive failures
+		stats.circuitOpen = true
+		// Exponential backoff for retry time
+		backoff := time.Duration(math.Pow(2, float64(stats.consecutiveFailures))) * time.Second
+		if backoff > 1*time.Hour { // Cap at 1 hour
+			backoff = 1 * time.Hour
+		}
+		stats.nextRetryTime = time.Now().Add(backoff)
+		log.Printf("Circuit breaker opened for task %s, next retry at %v", taskName, stats.nextRetryTime)
+	}
+}
+
+// resetErrorStats resets error statistics for a task after successful execution
+func (cm *CacheManager) resetErrorStats(taskName string) {
+	cm.errorStatsLock.Lock()
+	defer cm.errorStatsLock.Unlock()
+
+	delete(cm.taskErrors, taskName)
+}
+
+// handleTaskFailure handles final task failure after all retries
+func (cm *CacheManager) handleTaskFailure(taskName string, err error) {
+	// Determine error type
+	var errType TaskErrorType
+	switch {
+	case strings.Contains(err.Error(), "rate limit"):
+		errType = ErrRateLimit
+	case strings.Contains(err.Error(), "timeout"):
+		errType = ErrTimeout
+	case strings.Contains(err.Error(), "memory cache limit"):
+		errType = ErrResourceExhausted
+	default:
+		errType = ErrTaskExecution
+	}
+
+	taskErr := &TaskError{
+		TaskName: taskName,
+		ErrType:  errType,
+		Err:      err,
+	}
+
+	// Log detailed error information
+	log.Printf("Task failure: %v", taskErr)
+
+	// Update error stats
+	cm.updateErrorStats(taskName, taskErr)
+}
+
 // executeTask executes a cache task with retries
 func (cm *CacheManager) executeTask(task *CacheTask) {
+	// Check circuit breaker
+	if !cm.canExecuteTask(task.Name) {
+		log.Printf("Circuit breaker open for task %s, skipping execution", task.Name)
+		return
+	}
+
 	var attempt int
 	var lastErr error
 
@@ -359,11 +489,13 @@ func (cm *CacheManager) executeTask(task *CacheTask) {
 			continue
 		}
 
+		// Reset error stats on success
+		cm.resetErrorStats(task.Name)
 		return // Success
 	}
 
-	log.Printf("Task %s failed after %d attempts. Last error: %v",
-		task.Name, attempt, lastErr)
+	// Handle final failure
+	cm.handleTaskFailure(task.Name, lastErr)
 }
 
 // cacheData stores data in the appropriate cache
@@ -411,4 +543,20 @@ func (cm *CacheManager) cacheInMemory(task *CacheTask, data interface{}) error {
 func (cm *CacheManager) cacheOnDisk(task *CacheTask, data interface{}) error {
 	// Implementation will be added in the next file
 	return cm.diskCache.Store(task.Key, data, task.SizeBytes, task.Compression)
+}
+
+// GetTaskErrorStats returns error statistics for a task
+func (cm *CacheManager) GetTaskErrorStats(taskName string) *TaskErrorStats {
+	cm.errorStatsLock.RLock()
+	defer cm.errorStatsLock.RUnlock()
+
+	if stats, exists := cm.taskErrors[taskName]; exists {
+		return &TaskErrorStats{
+			consecutiveFailures: stats.consecutiveFailures,
+			lastErrorTime:       stats.lastErrorTime,
+			circuitOpen:         stats.circuitOpen,
+			nextRetryTime:       stats.nextRetryTime,
+		}
+	}
+	return nil
 }
