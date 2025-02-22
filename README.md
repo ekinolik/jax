@@ -170,7 +170,18 @@ JAX_MARKET_CACHE_TTL=1s      # Default 1 second
 JAX_MEMORY_CACHE_LIMIT=52428800     # Default 50MB (in bytes)
 JAX_DISK_CACHE_LIMIT=2147483648     # Default 2GB (in bytes)
 JAX_CACHE_DIR=cache                 # Default cache directory
+
+# Task Execution
+JAX_NUM_EXECUTORS=3                 # Default 3 executors (min: 1)
 ```
+
+The number of executors determines how many cache tasks can be processed concurrently. More executors can improve throughput but will consume more system resources. Choose a value based on:
+- Available system resources (CPU, memory)
+- Expected task load
+- Task execution patterns
+- API rate limits
+
+For most use cases, the default of 3 executors provides a good balance between performance and resource usage.
 
 ### Cache Behavior
 - Small data (<10KB) is automatically stored in memory

@@ -34,6 +34,7 @@ type Config struct {
 	MemoryCacheLimit int64
 	DiskCacheLimit   int64
 	CacheDir         string
+	NumExecutors     int // Number of cache task executors
 
 	// Environment
 	Env Environment
@@ -96,6 +97,16 @@ func LoadConfig() (*Config, error) {
 
 	// Load cache directory
 	config.CacheDir = getEnvWithDefault("JAX_CACHE_DIR", "cache")
+
+	// Load number of executors
+	numExecutors, err := getEnvIntWithDefault("JAX_NUM_EXECUTORS", 3) // Default to 3 executors
+	if err != nil {
+		return nil, err
+	}
+	if numExecutors < 1 {
+		return nil, fmt.Errorf("JAX_NUM_EXECUTORS must be at least 1")
+	}
+	config.NumExecutors = numExecutors
 
 	return config, nil
 }

@@ -38,3 +38,15 @@ func getEnvDurationWithDefault(key string, defaultValue time.Duration) (time.Dur
 	}
 	return defaultValue, nil
 }
+
+// getEnvIntWithDefault returns the environment variable as int or the default if not set/invalid
+func getEnvIntWithDefault(key string, defaultValue int) (int, error) {
+	if value := os.Getenv(key); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return 0, fmt.Errorf("invalid value for %s: %s", key, value)
+		}
+		return parsed, nil
+	}
+	return defaultValue, nil
+}

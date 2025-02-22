@@ -57,6 +57,25 @@ type TimedTask struct {
 	Times       []time.Time // Daily times to run
 	RunWeekends bool
 	Task        CacheTask
+	lastRun     time.Time // Track when the task last ran
+}
+
+// taskQueueEntry represents a task waiting to be executed
+type taskQueueEntry struct {
+	task      *CacheTask
+	scheduled time.Time
+}
+
+// scheduledTask represents a unified task that can be either interval or timed
+type scheduledTask struct {
+	task        *CacheTask
+	nextRun     time.Time
+	interval    *time.Duration // nil for timed tasks
+	times       []time.Time    // nil for interval tasks
+	lastRun     time.Time
+	runWeekends bool
+	startTime   time.Time
+	endTime     time.Time
 }
 
 // CacheManager manages different types of caches
@@ -75,9 +94,14 @@ type CacheManager struct {
 	diskCache   *DiskCacheManager
 	cacheLock   sync.RWMutex
 
-	// Tasks
-	intervalTasks map[string]*IntervalTask
-	timedTasks    map[string]*TimedTask
+	// Unified task scheduling
+	tasks        map[string]*scheduledTask
+	taskLock     sync.RWMutex
+	taskQueue    chan *scheduledTask
+	numExecutors int
+
+	// Task execution
+	executorWg sync.WaitGroup
 }
 
 type CacheEntry struct {
@@ -93,102 +117,74 @@ func NewCacheManager(cfg *config.Config, client interface{}) (*CacheManager, err
 		return nil, fmt.Errorf("failed to load timezone: %v", err)
 	}
 
-	return &CacheManager{
-		client:        client,
-		memoryLimit:   MemoryCacheLimit,
-		diskLimit:     DiskCacheLimit,
-		stopChan:      make(chan struct{}),
-		timezone:      tz,
-		memoryCache:   make(map[string]*CacheEntry),
-		diskCache:     NewDiskCacheManager("cache"),
-		intervalTasks: make(map[string]*IntervalTask),
-		timedTasks:    make(map[string]*TimedTask),
-	}, nil
+	cm := &CacheManager{
+		client:       client,
+		memoryLimit:  MemoryCacheLimit,
+		diskLimit:    DiskCacheLimit,
+		stopChan:     make(chan struct{}),
+		timezone:     tz,
+		memoryCache:  make(map[string]*CacheEntry),
+		diskCache:    NewDiskCacheManager("cache"),
+		tasks:        make(map[string]*scheduledTask),
+		taskQueue:    make(chan *scheduledTask, 100), // Buffer of 100 to prevent blocking
+		numExecutors: cfg.NumExecutors,
+	}
+
+	return cm, nil
 }
 
 // AddIntervalTask adds a new interval task
 func (cm *CacheManager) AddIntervalTask(task *IntervalTask) error {
-	if _, exists := cm.intervalTasks[task.Name]; exists {
+	if _, exists := cm.tasks[task.Name]; exists {
 		return fmt.Errorf("task %s already exists", task.Name)
 	}
-	cm.intervalTasks[task.Name] = task
+	cm.tasks[task.Name] = &scheduledTask{
+		task:        &task.Task,
+		runWeekends: task.RunWeekends,
+		startTime:   task.StartTime,
+		endTime:     task.EndTime,
+	}
 	return nil
 }
 
 // AddTimedTask adds a new timed task
 func (cm *CacheManager) AddTimedTask(task *TimedTask) error {
-	if _, exists := cm.timedTasks[task.Name]; exists {
+	if _, exists := cm.tasks[task.Name]; exists {
 		return fmt.Errorf("task %s already exists", task.Name)
 	}
-	cm.timedTasks[task.Name] = task
+	cm.tasks[task.Name] = &scheduledTask{
+		task:        &task.Task,
+		runWeekends: task.RunWeekends,
+		times:       task.Times,
+	}
 	return nil
 }
 
 // Start starts the cache manager
 func (cm *CacheManager) Start() {
-	cm.wg.Add(2) // One for interval tasks, one for timed tasks
-	go cm.runIntervalTasks()
-	go cm.runTimedTasks()
+	// Initialize executors
+	cm.executorWg.Add(cm.numExecutors + 1) // +1 for the scheduler
+
+	// Start the task scheduler
+	go cm.runTaskScheduler()
+
+	// Start the executors
+	for i := 0; i < cm.numExecutors; i++ {
+		go cm.runExecutor()
+	}
+
+	log.Printf("Started cache manager with %d executors", cm.numExecutors)
 }
 
 // Stop stops the cache manager
 func (cm *CacheManager) Stop() {
 	close(cm.stopChan)
-	cm.wg.Wait()
+	cm.executorWg.Wait()
 }
 
-// runIntervalTasks runs all interval tasks
-func (cm *CacheManager) runIntervalTasks() {
-	defer cm.wg.Done()
-
-	// Create a ticker for each task
-	tickers := make(map[string]*time.Ticker)
-	for name, task := range cm.intervalTasks {
-		tickers[name] = time.NewTicker(task.Interval)
-		// Execute immediately for the first time
-		if cm.shouldRunTask(task.RunWeekends, task.StartTime, task.EndTime) {
-			go cm.executeTask(&task.Task)
-		}
-	}
-
-	for {
-		select {
-		case <-cm.stopChan:
-			// Stop all tickers
-			for _, ticker := range tickers {
-				ticker.Stop()
-			}
-			return
-		default:
-			for name, task := range cm.intervalTasks {
-				select {
-				case <-cm.stopChan:
-					return
-				case <-tickers[name].C:
-					if cm.shouldRunTask(task.RunWeekends, task.StartTime, task.EndTime) {
-						go cm.executeTask(&task.Task)
-					}
-				default:
-					// Check next ticker
-				}
-			}
-			// Small sleep to prevent busy loop
-			time.Sleep(time.Millisecond)
-		}
-	}
-}
-
-// runTimedTasks runs all timed tasks
-func (cm *CacheManager) runTimedTasks() {
-	defer cm.wg.Done()
-
-	// Execute immediately for tasks that should run now
-	now := time.Now().In(cm.timezone)
-	for _, task := range cm.timedTasks {
-		if cm.shouldRunTimedTask(task, now) {
-			go cm.executeTask(&task.Task)
-		}
-	}
+// runTaskScheduler runs the unified task scheduler
+func (cm *CacheManager) runTaskScheduler() {
+	defer cm.executorWg.Done()
 
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -198,12 +194,100 @@ func (cm *CacheManager) runTimedTasks() {
 		case <-cm.stopChan:
 			return
 		case now := <-ticker.C:
-			now = now.In(cm.timezone)
-			for _, task := range cm.timedTasks {
+			cm.checkAndScheduleTasks(now)
+		}
+	}
+}
+
+// checkAndScheduleTasks checks and schedules all tasks that should run
+func (cm *CacheManager) checkAndScheduleTasks(now time.Time) {
+	cm.taskLock.Lock()
+	defer cm.taskLock.Unlock()
+
+	now = now.In(cm.timezone)
+	currentMinute := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, cm.timezone)
+
+	for _, task := range cm.tasks {
+		if task.nextRun.IsZero() {
+			// Initialize next run time for new tasks
+			if task.interval != nil {
+				task.nextRun = now
+			} else {
+				// For timed tasks, set to the next occurrence
+				task.nextRun = cm.getNextTimedRun(task, now)
+			}
+		}
+
+		// Check if task should run
+		if now.After(task.nextRun) || now.Equal(task.nextRun) {
+			if task.interval != nil {
+				// Interval task
+				if cm.shouldRunTask(task.runWeekends, task.startTime, task.endTime) {
+					select {
+					case cm.taskQueue <- task:
+						task.nextRun = now.Add(*task.interval)
+					default:
+						log.Printf("Warning: Task queue is full, skipping task %s", task.task.Name)
+					}
+				}
+			} else {
+				// Timed task
 				if cm.shouldRunTimedTask(task, now) {
-					go cm.executeTask(&task.Task)
+					select {
+					case cm.taskQueue <- task:
+						task.nextRun = cm.getNextTimedRun(task, now)
+						task.lastRun = currentMinute
+					default:
+						log.Printf("Warning: Task queue is full, skipping task %s", task.task.Name)
+					}
 				}
 			}
+		}
+	}
+}
+
+// getNextTimedRun calculates the next run time for a timed task
+func (cm *CacheManager) getNextTimedRun(task *scheduledTask, now time.Time) time.Time {
+	if len(task.times) == 0 {
+		return now.Add(24 * time.Hour) // Default to tomorrow if no times specified
+	}
+
+	// Find the next scheduled time
+	nextRun := time.Date(3000, 1, 1, 0, 0, 0, 0, cm.timezone) // Far future date
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, cm.timezone)
+	tomorrow := today.Add(24 * time.Hour)
+
+	// Check today's remaining times
+	for _, t := range task.times {
+		candidateTime := time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), t.Minute(), 0, 0, cm.timezone)
+		if candidateTime.After(now) && candidateTime.Before(nextRun) {
+			nextRun = candidateTime
+		}
+	}
+
+	// If no times found today, check tomorrow
+	if nextRun.Equal(time.Date(3000, 1, 1, 0, 0, 0, 0, cm.timezone)) {
+		for _, t := range task.times {
+			candidateTime := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), t.Hour(), t.Minute(), 0, 0, cm.timezone)
+			if candidateTime.Before(nextRun) {
+				nextRun = candidateTime
+			}
+		}
+	}
+
+	return nextRun
+}
+
+// runExecutor runs a task executor
+func (cm *CacheManager) runExecutor() {
+	defer cm.executorWg.Done()
+
+	for {
+		select {
+		case <-cm.stopChan:
+			return
+		case task := <-cm.taskQueue:
+			cm.executeTask(task.task)
 		}
 	}
 }
@@ -228,14 +312,21 @@ func (cm *CacheManager) shouldRunTask(runWeekends bool, start, end time.Time) bo
 }
 
 // shouldRunTimedTask checks if a timed task should run
-func (cm *CacheManager) shouldRunTimedTask(task *TimedTask, now time.Time) bool {
-	if !task.RunWeekends && (now.Weekday() == time.Saturday || now.Weekday() == time.Sunday) {
+func (cm *CacheManager) shouldRunTimedTask(task *scheduledTask, now time.Time) bool {
+	// Check weekend constraint first
+	if !task.runWeekends && (now.Weekday() == time.Saturday || now.Weekday() == time.Sunday) {
 		return false
 	}
 
-	for _, t := range task.Times {
+	// Round current time to minute for comparison
+	currentMinute := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, cm.timezone)
+
+	for _, t := range task.times {
+		// Create task time for today
 		taskTime := time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), t.Minute(), 0, 0, cm.timezone)
-		if now.Sub(taskTime) < time.Minute && now.Sub(taskTime) >= 0 {
+
+		// Check if this is the scheduled minute
+		if currentMinute.Equal(taskTime) {
 			return true
 		}
 	}
