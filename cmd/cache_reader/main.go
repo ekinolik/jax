@@ -3,41 +3,13 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
-	"encoding/gob"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
-
-	"github.com/ekinolik/jax/internal/cache"
-	"github.com/ekinolik/jax/internal/polygon"
-	"github.com/polygon-io/client-go/rest/models"
 )
-
-func init() {
-	// Register the same types as in disk.go
-	gob.Register(map[string]interface{}{})
-	gob.Register([]interface{}{})
-	gob.Register(string(""))
-	gob.Register(int(0))
-	gob.Register(float64(0))
-	gob.Register(bool(false))
-
-	gob.RegisterName("LastTradeData", &cache.LastTradeData{})
-	gob.RegisterName("OptionData", &cache.OptionData{})
-	gob.RegisterName("AggregatesData", &cache.AggregatesData{})
-	gob.RegisterName("CacheableAggregatesData", &cache.CacheableAggregatesData{})
-	gob.RegisterName("CacheableAgg", &cache.CacheableAgg{})
-	gob.RegisterName("CacheableAggSlice", []cache.CacheableAgg{})
-
-	gob.Register(&polygon.LastTradeResponse{})
-	gob.Register(&polygon.Chain{})
-	gob.Register(models.LastTrade{})
-	gob.Register(models.Agg{})
-	gob.Register([]models.Agg{})
-}
 
 func main() {
 	compressed := flag.Bool("compressed", true, "whether the cache file is compressed")
@@ -74,18 +46,17 @@ func main() {
 		finalData = data
 	}
 
-	// Decode data
-	var wrapper cache.DataWrapper
-	dec := gob.NewDecoder(bytes.NewReader(finalData))
-	if err := dec.Decode(&wrapper); err != nil {
-		log.Fatalf("Failed to decode data: %v", err)
+	// Parse JSON data
+	var result interface{}
+	if err := json.Unmarshal(finalData, &result); err != nil {
+		log.Fatalf("Failed to parse JSON data: %v", err)
 	}
 
-	// Convert to JSON for pretty printing
-	jsonData, err := json.MarshalIndent(wrapper.Data, "", "  ")
+	// Pretty print the JSON
+	prettyJSON, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
-		log.Fatalf("Failed to convert to JSON: %v", err)
+		log.Fatalf("Failed to format JSON: %v", err)
 	}
 
-	fmt.Println(string(jsonData))
+	fmt.Println(string(prettyJSON))
 }
