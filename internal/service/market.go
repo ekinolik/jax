@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strconv"
 	"time"
@@ -18,10 +19,14 @@ type MarketService struct {
 	client *polygon.CachedClient
 }
 
-func NewMarketService(cfg *config.Config) *MarketService {
-	return &MarketService{
-		client: polygon.NewCachedClient(cfg),
+func NewMarketService(cfg *config.Config) (*MarketService, error) {
+	client, err := polygon.NewCachedClient(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cached client: %w", err)
 	}
+	return &MarketService{
+		client: client,
+	}, nil
 }
 
 func (s *MarketService) GetLastTrade(ctx context.Context, req *marketv1.GetLastTradeRequest) (*marketv1.GetLastTradeResponse, error) {

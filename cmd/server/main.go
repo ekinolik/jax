@@ -150,10 +150,16 @@ func main() {
 	)
 
 	// Register services
-	optionService := service.NewOptionService(cfg)
+	optionService, err := service.NewOptionService(cfg)
+	if err != nil {
+		log.Fatalf("failed to create option service: %v", err)
+	}
 	optionv1.RegisterOptionServiceServer(s, optionService)
 
-	marketService := service.NewMarketService(cfg)
+	marketService, err := service.NewMarketService(cfg)
+	if err != nil {
+		log.Fatalf("failed to create market service: %v", err)
+	}
 	marketv1.RegisterMarketServiceServer(s, marketService)
 
 	// Register reflection service on gRPC server

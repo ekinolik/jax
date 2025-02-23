@@ -1,9 +1,24 @@
 cache_tasks:
+  # Last Trade Tasks (Frequent Updates)
+  - name: last-trades
+    type: interval
+    symbols:
+      - AAPL
+      - SPY
+      - QQQ
+    function: GetLastTrade
+    interval: 1s
+    cache:
+      type: memory
+      size_bytes: 1024  # 1KB per symbol
+      compression: false
+
   # Option Chain Tasks (Regular Interval)
   - name: option-chains
     type: interval
     symbols:
-      - FTAI
+      - AAPL
+      - SPY
     function: GetOptionData
     interval: 30m
     start_time: "06:00"  # Market pre-open
@@ -14,6 +29,43 @@ cache_tasks:
       size_bytes: 1048576  # 1MB per symbol
       compression: true
 
+  # Daily Aggregates (Timed Updates)
+  - name: daily-aggregates
+    type: timed
+    symbols:
+      - AAPL
+      - SPY
+      - QQQ
+      - TSLA
+    function: GetAggregates
+    times:
+      - "09:00"  # Morning update
+      - "16:30"  # After market close
+    run_weekends: true
+    function_args:
+      multiplier: 1
+      timespan: "minute"
+      adjusted: true
+    cache:
+      type: disk
+      size_bytes: 10485760  # 10MB per symbol
+      compression: true
+
+  # Open Interest (Timed Updates)
+  - name: open-interest
+    type: timed
+    symbols:
+      - AAPL
+      - SPY
+    function: GetOptionData
+    times:
+      - "08:00"  # Pre-market update
+      - "14:00"  # Mid-day update
+    run_weekends: false
+    cache:
+      type: disk
+      size_bytes: 5242880  # 5MB per symbol
+      compression: true
 
 # Global retry configuration (can be overridden per task)
 default_retry_config:

@@ -23,10 +23,14 @@ type OptionService struct {
 	client *polygon.CachedClient
 }
 
-func NewOptionService(cfg *config.Config) *OptionService {
-	return &OptionService{
-		client: polygon.NewCachedClient(cfg),
+func NewOptionService(cfg *config.Config) (*OptionService, error) {
+	client, err := polygon.NewCachedClient(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cached client: %w", err)
 	}
+	return &OptionService{
+		client: client,
+	}, nil
 }
 
 type ExposureType int
