@@ -6,6 +6,7 @@ cache_tasks:
       - AAPL
       - SPY
       - QQQ
+      - AMZN
     function: GetLastTrade
     interval: 1s
     cache:

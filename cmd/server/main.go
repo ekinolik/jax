@@ -148,7 +148,7 @@ func startCacheAndCreateScheduler(cfg *config.Config) *scheduler.Scheduler {
 	sched := scheduler.NewScheduler(cacheManager, client)
 
 	// Load tasks from configuration
-	if err := sched.LoadTasks("cache-configs/cache_tasks.yaml"); err != nil {
+	if err := sched.LoadTasks("cache-configs/cache_tasks.yaml", time.Minute); err != nil {
 		log.Fatalf("Failed to load tasks: %v", err)
 	}
 

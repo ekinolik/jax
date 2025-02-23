@@ -82,12 +82,14 @@ type TaskHandler func(ctx context.Context, useCache bool) (interface{}, error)
 
 // Scheduler manages and executes scheduled tasks
 type Scheduler struct {
-	tasks    map[string]*Task
-	cache    cache.Cache
-	client   PolygonClient
-	stopChan chan struct{}
-	wg       sync.WaitGroup
-	mu       sync.RWMutex
+	tasks         map[string]*Task
+	cache         cache.Cache
+	client        PolygonClient
+	stopChan      chan struct{}
+	wg            sync.WaitGroup
+	mu            sync.RWMutex
+	configPath    string
+	lastConfigMod time.Time
 }
 
 // NewScheduler creates a new scheduler
@@ -100,9 +102,32 @@ func NewScheduler(cache cache.Cache, client PolygonClient) *Scheduler {
 	}
 }
 
-// LoadTasks loads tasks from the YAML configuration file
-func (s *Scheduler) LoadTasks(configPath string) error {
-	data, err := os.ReadFile(configPath)
+// checkConfigModified checks if the config file has been modified since last load
+func (s *Scheduler) checkConfigModified() (bool, error) {
+	info, err := os.Stat(s.configPath)
+	if err != nil {
+		return false, fmt.Errorf("failed to stat config file: %w", err)
+	}
+
+	modified := info.ModTime()
+	if modified.After(s.lastConfigMod) {
+		return true, nil
+	}
+	return false, nil
+}
+
+// reloadConfig reloads the configuration if it has been modified
+func (s *Scheduler) reloadConfig() error {
+	modified, err := s.checkConfigModified()
+	if err != nil {
+		return err
+	}
+
+	if !modified {
+		return nil
+	}
+
+	data, err := os.ReadFile(s.configPath)
 	if err != nil {
 		return fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -112,6 +137,10 @@ func (s *Scheduler) LoadTasks(configPath string) error {
 		return fmt.Errorf("failed to parse config: %w", err)
 	}
 
+	// Create a new map for the updated tasks
+	newTasks := make(map[string]*Task)
+
+	// Load new tasks
 	for _, taskConfig := range config.CacheTasks {
 		for _, symbol := range taskConfig.Symbols {
 			task := &Task{
@@ -126,18 +155,68 @@ func (s *Scheduler) LoadTasks(configPath string) error {
 				},
 				UseCache:    true,
 				Compression: taskConfig.Cache.Compression,
-				TTL:         24 * time.Hour, // Default TTL, should be configurable
+				TTL:         24 * time.Hour, // Default TTL
 			}
 
-			// Create handler based on function type
 			task.Handler = s.createHandler(taskConfig.Function, symbol, taskConfig.FunctionArgs)
-
-			if err := s.AddTask(task); err != nil {
-				return fmt.Errorf("failed to add task %s: %w", task.Name, err)
-			}
+			newTasks[task.Name] = task
 		}
 	}
 
+	// Update tasks atomically
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Stop existing tasks that are not in the new config
+	for name := range s.tasks {
+		if _, exists := newTasks[name]; !exists {
+			// Signal the task to stop
+			s.stopChan <- struct{}{}
+		}
+	}
+
+	// Update the tasks map
+	s.tasks = newTasks
+	s.lastConfigMod = time.Now()
+
+	// Start new tasks
+	for _, task := range newTasks {
+		go s.runTask(task)
+	}
+
+	log.Printf("Successfully reloaded configuration from %s", s.configPath)
+	return nil
+}
+
+// startConfigReloader starts a goroutine that periodically checks for config changes
+func (s *Scheduler) startConfigReloader(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	go func() {
+		for {
+			select {
+			case <-s.stopChan:
+				ticker.Stop()
+				return
+			case <-ticker.C:
+				if err := s.reloadConfig(); err != nil {
+					log.Printf("Error reloading config: %v", err)
+				}
+			}
+		}
+	}()
+}
+
+// LoadTasks loads tasks from the YAML configuration file
+func (s *Scheduler) LoadTasks(configPath string, configReloadInterval time.Duration) error {
+	s.configPath = configPath
+	s.lastConfigMod = time.Now()
+
+	if err := s.reloadConfig(); err != nil {
+		return err
+	}
+
+	// Start the config reloader with the specified interval
+	s.startConfigReloader(configReloadInterval)
 	return nil
 }
 

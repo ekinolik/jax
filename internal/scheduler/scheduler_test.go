@@ -129,7 +129,7 @@ func TestScheduler(t *testing.T) {
 		defer scheduler.Stop()
 
 		configPath := createTestConfig(t)
-		err := scheduler.LoadTasks(configPath)
+		err := scheduler.LoadTasks(configPath, time.Minute)
 		require.NoError(t, err)
 
 		// Verify tasks were loaded
@@ -145,7 +145,7 @@ func TestScheduler(t *testing.T) {
 		defer scheduler.Stop()
 
 		configPath := createTestConfig(t)
-		err := scheduler.LoadTasks(configPath)
+		err := scheduler.LoadTasks(configPath, time.Minute)
 		require.NoError(t, err)
 
 		// Start the scheduler
@@ -168,14 +168,72 @@ func TestScheduler(t *testing.T) {
 		defer scheduler.Stop()
 
 		// Test with non-existent file
-		err := scheduler.LoadTasks("non_existent_file.yaml")
+		err := scheduler.LoadTasks("non_existent_file.yaml", time.Minute)
 		assert.Error(t, err)
 
 		// Test with invalid YAML
 		tmpDir := t.TempDir()
 		invalidConfigPath := filepath.Join(tmpDir, "invalid.yaml")
 		require.NoError(t, os.WriteFile(invalidConfigPath, []byte("invalid: yaml: content"), 0644))
-		err = scheduler.LoadTasks(invalidConfigPath)
+		err = scheduler.LoadTasks(invalidConfigPath, time.Minute)
 		assert.Error(t, err)
 	})
+}
+
+func TestConfigReload(t *testing.T) {
+	mockCache := newMockCache()
+	mockClient := newMockPolygonClient()
+	scheduler := NewScheduler(mockCache, mockClient)
+	defer scheduler.Stop()
+
+	// Create initial config file
+	initialConfig := `cache_tasks:
+  - name: test-last-trade
+    type: interval
+    symbols:
+      - AAPL
+    function: GetLastTrade
+    interval: 1s
+    cache:
+      type: memory
+      size_bytes: 1024
+      compression: false`
+
+	configPath := filepath.Join(t.TempDir(), "test_cache_tasks.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(initialConfig), 0644))
+
+	// Load initial config
+	err := scheduler.LoadTasks(configPath, 100*time.Millisecond)
+	require.NoError(t, err)
+	assert.Len(t, scheduler.tasks, 1)
+	assert.Contains(t, scheduler.tasks, "test-last-trade-AAPL")
+
+	// Wait a bit to ensure file modification time will be different
+	time.Sleep(time.Second)
+
+	// Update config file with new task
+	updatedConfig := `cache_tasks:
+  - name: test-last-trade
+    type: interval
+    symbols:
+      - AAPL
+      - SPY
+    function: GetLastTrade
+    interval: 1s
+    cache:
+      type: memory
+      size_bytes: 1024
+      compression: false`
+
+	require.NoError(t, os.WriteFile(configPath, []byte(updatedConfig), 0644))
+
+	// Wait for config reload (should happen within 300ms)
+	time.Sleep(300 * time.Millisecond)
+
+	// Verify tasks were updated
+	scheduler.mu.RLock()
+	assert.Len(t, scheduler.tasks, 2)
+	assert.Contains(t, scheduler.tasks, "test-last-trade-AAPL")
+	assert.Contains(t, scheduler.tasks, "test-last-trade-SPY")
+	scheduler.mu.RUnlock()
 }
