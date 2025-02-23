@@ -254,19 +254,8 @@ func (s *Scheduler) executeTask(task *Task) {
 	ctx := context.Background()
 	cacheKey := fmt.Sprintf("task:%s", task.Name)
 
-	// Try to get from cache if enabled
-	if task.UseCache {
-		if cachedData, err := s.cache.Get(cacheKey); err == nil {
-			var result interface{}
-			if err := json.Unmarshal([]byte(cachedData), &result); err == nil {
-				log.Printf("Task %s: using cached data", task.Name)
-				return
-			}
-		}
-	}
-
-	// Execute the task
-	result, err := task.Handler(ctx, task.UseCache)
+	// Execute the task with useCache=false to force fresh data
+	result, err := task.Handler(ctx, false)
 	if err != nil {
 		log.Printf("Task %s failed: %v", task.Name, err)
 		return
