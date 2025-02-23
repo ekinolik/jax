@@ -14,7 +14,10 @@ import (
 
 	marketv1 "github.com/ekinolik/jax/api/proto/market/v1"
 	optionv1 "github.com/ekinolik/jax/api/proto/option/v1"
+	"github.com/ekinolik/jax/internal/cache"
 	"github.com/ekinolik/jax/internal/config"
+	"github.com/ekinolik/jax/internal/polygon"
+	"github.com/ekinolik/jax/internal/scheduler"
 	"github.com/ekinolik/jax/internal/service"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -126,11 +129,41 @@ func chainInterceptors(interceptors ...grpc.UnaryServerInterceptor) grpc.UnarySe
 	}
 }
 
+func startCacheAndCreateScheduler(cfg *config.Config) *scheduler.Scheduler {
+	// Create cache manager
+	cacheConfig := cache.Config{
+		StorageType: cache.Disk,
+		BasePath:    cfg.CacheDir,
+		MaxSize:     cfg.DiskCacheLimit,
+	}
+	cacheManager, err := cache.NewManager(cacheConfig)
+	if err != nil {
+		log.Fatalf("Failed to create cache manager: %v", err)
+	}
+
+	// Create Polygon client
+	client := polygon.NewClient(cfg)
+
+	// Create scheduler
+	sched := scheduler.NewScheduler(cacheManager, client)
+
+	// Load tasks from configuration
+	if err := sched.LoadTasks("cache-configs/cache_tasks.yaml"); err != nil {
+		log.Fatalf("Failed to load tasks: %v", err)
+	}
+
+	return sched
+}
+
 func main() {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
+
+	sched := startCacheAndCreateScheduler(cfg)
+	sched.Start()
+	defer sched.Stop()
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Port))
 	if err != nil {
