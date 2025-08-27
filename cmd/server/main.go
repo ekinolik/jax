@@ -130,11 +130,31 @@ func chainInterceptors(interceptors ...grpc.UnaryServerInterceptor) grpc.UnarySe
 }
 
 func startCacheAndCreateScheduler(cfg *config.Config) *scheduler.Scheduler {
-	// Create cache manager
+	// Create cache manager with type-specific configurations
 	cacheConfig := cache.Config{
 		StorageType: cache.Disk,
 		BasePath:    cfg.CacheDir,
 		MaxSize:     cfg.DiskCacheLimit,
+		TypeConfigs: map[cache.DataType]cache.TypeConfig{
+			cache.OptionChains: {
+				StorageType: cache.Disk,
+				TTL:         cfg.DexCacheTTL, // Use existing config value
+				Compression: true,
+				KeyPrefix:   "options",
+			},
+			cache.LastTrades: {
+				StorageType: cache.Memory,
+				TTL:         cfg.MarketCacheTTL, // Use existing config value
+				Compression: false,
+				KeyPrefix:   "trades",
+			},
+			cache.Aggregates: {
+				StorageType: cache.Disk,
+				TTL:         cfg.MarketCacheTTL, // Use existing config value
+				Compression: true,
+				KeyPrefix:   "aggs",
+			},
+		},
 	}
 	cacheManager, err := cache.NewManager(cacheConfig)
 	if err != nil {
@@ -183,16 +203,22 @@ func main() {
 	)
 
 	// Register services
-	optionService, err := service.NewOptionService(cfg)
-	if err != nil {
-		log.Fatalf("failed to create option service: %v", err)
-	}
+	/*
+		optionService, err := service.NewOptionService(cfg)
+		if err != nil {
+			log.Fatalf("failed to create option service: %v", err)
+		}
+	*/
+	optionService := service.NewOptionService(cfg, sched.GetCache())
 	optionv1.RegisterOptionServiceServer(s, optionService)
 
-	marketService, err := service.NewMarketService(cfg)
-	if err != nil {
-		log.Fatalf("failed to create market service: %v", err)
-	}
+	/*
+		marketService, err := service.NewMarketService(cfg)
+		if err != nil {
+			log.Fatalf("failed to create market service: %v", err)
+		}
+	*/
+	marketService := service.NewMarketService(cfg, sched.GetCache())
 	marketv1.RegisterMarketServiceServer(s, marketService)
 
 	// Register reflection service on gRPC server

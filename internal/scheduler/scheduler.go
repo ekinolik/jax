@@ -93,6 +93,10 @@ func NewScheduler(cache cache.Cache, client PolygonClient) *Scheduler {
 	}
 }
 
+func (s *Scheduler) GetCache() cache.Cache {
+	return s.cache
+}
+
 // checkConfigModified checks if the config file has been modified since last load
 func (s *Scheduler) checkConfigModified() (bool, error) {
 	info, err := os.Stat(s.configPath)
@@ -170,6 +174,7 @@ func (s *Scheduler) reloadConfig() error {
 
 	// Start new tasks
 	for _, task := range newTasks {
+		s.wg.Add(1)
 		go s.runTask(task)
 	}
 

@@ -30,6 +30,16 @@ type CachedClient struct {
 	marketCacheTTL time.Duration
 }
 
+func NewCachedClient(cfg *config.Config, cacheManager cache.Cache) *CachedClient {
+	return &CachedClient{
+		client:         NewClient(cfg),
+		cache:          cacheManager,
+		dexCacheTTL:    cfg.DexCacheTTL,
+		marketCacheTTL: cfg.MarketCacheTTL,
+	}
+}
+
+/*
 func NewCachedClient(cfg *config.Config) (*CachedClient, error) {
 	cacheManager, err := cache.NewManager(cache.Config{
 		StorageType: cache.Memory,
@@ -46,12 +56,11 @@ func NewCachedClient(cfg *config.Config) (*CachedClient, error) {
 		marketCacheTTL: cfg.MarketCacheTTL,
 	}, nil
 }
+*/
 
 func (c *CachedClient) GetOptionData(underlying string, startStrike, endStrike *float64) (float64, Chain, error) {
-	cacheKey := fmt.Sprintf("option_data:%s", underlying)
-
-	// Check cache
-	if cached, err := c.cache.Get(cacheKey); err == nil {
+	// Check cache using typed method
+	if cached, err := c.cache.GetTyped(cache.OptionChains, underlying); err == nil {
 		var data OptionDataEntry
 		if err := json.Unmarshal([]byte(cached), &data); err == nil {
 			return data.SpotPrice, data.Chain, nil
@@ -75,7 +84,7 @@ func (c *CachedClient) GetOptionData(underlying string, startStrike, endStrike *
 		return spotPrice, chain, nil // Return data even if caching fails
 	}
 
-	if err := c.cache.Store(cacheKey, string(jsonData), c.dexCacheTTL, true); err != nil {
+	if err := c.cache.StoreTyped(cache.OptionChains, underlying, string(jsonData)); err != nil {
 		return spotPrice, chain, nil // Return data even if caching fails
 	}
 
@@ -83,8 +92,7 @@ func (c *CachedClient) GetOptionData(underlying string, startStrike, endStrike *
 }
 
 func (c *CachedClient) GetCacheEntry(underlying string) *CacheEntry {
-	cacheKey := fmt.Sprintf("option_data:%s", underlying)
-	if _, err := c.cache.Get(cacheKey); err == nil {
+	if _, err := c.cache.GetTyped(cache.OptionChains, underlying); err == nil {
 		return &CacheEntry{
 			Data:      nil, // We don't need the actual data here
 			ExpiresAt: time.Now().Add(c.dexCacheTTL),
@@ -99,10 +107,8 @@ type LastTradeResponse struct {
 }
 
 func (c *CachedClient) GetLastTrade(ticker string) (*LastTradeResponse, bool, error) {
-	cacheKey := fmt.Sprintf("last_trade:%s", ticker)
-
-	// Check cache
-	if cached, err := c.cache.Get(cacheKey); err == nil {
+	// Check cache using typed method
+	if cached, err := c.cache.GetTyped(cache.LastTrades, ticker); err == nil {
 		var lastTrade LastTradeResponse
 		if err := json.Unmarshal([]byte(cached), &lastTrade); err == nil {
 			return &lastTrade, true, nil
@@ -130,7 +136,7 @@ func (c *CachedClient) GetLastTrade(ticker string) (*LastTradeResponse, bool, er
 		return lastTrade, false, nil // Return data even if caching fails
 	}
 
-	if err := c.cache.Store(cacheKey, string(jsonData), c.marketCacheTTL, false); err != nil {
+	if err := c.cache.StoreTyped(cache.LastTrades, ticker, string(jsonData)); err != nil {
 		return lastTrade, false, nil // Return data even if caching fails
 	}
 
@@ -151,10 +157,13 @@ type AggregatesResponse struct {
 }
 
 func (c *CachedClient) GetAggregates(ticker string, multiplier int, timespan string, from, to int64, adjusted bool) (*AggregatesResponse, bool, error) {
-	cacheKey := fmt.Sprintf("aggregates:%s:%d:%s:%d:%d:%t", ticker, multiplier, timespan, from, to, adjusted)
+	// Create a unique identifier for this aggregates request
+	aggregateID := fmt.Sprintf("%s:%d:%s:%d:%d:%t", ticker, multiplier, timespan, from, to, adjusted)
 
-	// Check cache
-	if cached, err := c.cache.Get(cacheKey); err == nil {
+	// Check cache using typed method
+	fmt.Println("Checking cache for", aggregateID)
+	if cached, err := c.cache.GetTyped(cache.Aggregates, aggregateID); err == nil {
+		fmt.Println("Found in cache")
 		var aggs AggregatesResponse
 		if err := json.Unmarshal([]byte(cached), &aggs); err == nil {
 			return &aggs, true, nil
@@ -178,7 +187,7 @@ func (c *CachedClient) GetAggregates(ticker string, multiplier int, timespan str
 		return response, false, nil // Return data even if caching fails
 	}
 
-	if err := c.cache.Store(cacheKey, string(jsonData), c.marketCacheTTL, true); err != nil {
+	if err := c.cache.StoreTyped(cache.Aggregates, aggregateID, string(jsonData)); err != nil {
 		return response, false, nil // Return data even if caching fails
 	}
 
