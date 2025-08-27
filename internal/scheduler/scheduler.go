@@ -25,24 +25,16 @@ type PolygonClient interface {
 
 // TaskConfig represents a single task configuration from YAML
 type TaskConfig struct {
-	Name         string          `yaml:"name"`
-	Type         string          `yaml:"type"`
-	Symbols      []string        `yaml:"symbols"`
-	Function     string          `yaml:"function"`
-	Interval     string          `yaml:"interval,omitempty"`
-	StartTime    string          `yaml:"start_time,omitempty"`
-	EndTime      string          `yaml:"end_time,omitempty"`
-	Times        []string        `yaml:"times,omitempty"`
-	RunWeekends  bool            `yaml:"run_weekends"`
-	FunctionArgs *FunctionArgs   `yaml:"function_args,omitempty"`
-	Cache        TaskCacheConfig `yaml:"cache"`
-}
-
-// TaskCacheConfig represents cache configuration for a task
-type TaskCacheConfig struct {
-	Type        string `yaml:"type"`
-	SizeBytes   int64  `yaml:"size_bytes"`
-	Compression bool   `yaml:"compression"`
+	Name         string        `yaml:"name"`
+	Type         string        `yaml:"type"`
+	Symbols      []string      `yaml:"symbols"`
+	Function     string        `yaml:"function"`
+	Interval     string        `yaml:"interval,omitempty"`
+	StartTime    string        `yaml:"start_time,omitempty"`
+	EndTime      string        `yaml:"end_time,omitempty"`
+	Times        []string      `yaml:"times,omitempty"`
+	RunWeekends  bool          `yaml:"run_weekends"`
+	FunctionArgs *FunctionArgs `yaml:"function_args,omitempty"`
 }
 
 // FunctionArgs represents additional arguments for specific functions
@@ -59,12 +51,11 @@ type TasksConfig struct {
 
 // Task represents a scheduled task
 type Task struct {
-	Name        string
-	Schedule    Schedule
-	Handler     TaskHandler
-	UseCache    bool
-	Compression bool
-	TTL         time.Duration
+	Name     string
+	Schedule Schedule
+	Handler  TaskHandler
+	DataType cache.DataType
+	Symbol   string
 }
 
 // Schedule defines when a task should run
@@ -143,6 +134,8 @@ func (s *Scheduler) reloadConfig() error {
 	// Load new tasks
 	for _, taskConfig := range config.CacheTasks {
 		for _, symbol := range taskConfig.Symbols {
+			handler, dataType := s.createHandler(taskConfig.Function, symbol, taskConfig.FunctionArgs)
+
 			task := &Task{
 				Name: fmt.Sprintf("%s-%s", taskConfig.Name, symbol),
 				Schedule: Schedule{
@@ -153,12 +146,10 @@ func (s *Scheduler) reloadConfig() error {
 					StartTime:   taskConfig.StartTime,
 					EndTime:     taskConfig.EndTime,
 				},
-				UseCache:    true,
-				Compression: taskConfig.Cache.Compression,
-				TTL:         24 * time.Hour, // Default TTL
+				Handler:  handler,
+				DataType: dataType,
+				Symbol:   symbol,
 			}
-
-			task.Handler = s.createHandler(taskConfig.Function, symbol, taskConfig.FunctionArgs)
 			newTasks[task.Name] = task
 		}
 	}
@@ -170,12 +161,10 @@ func (s *Scheduler) reloadConfig() error {
 	// Stop existing tasks that are not in the new config
 	for name := range s.tasks {
 		if _, exists := newTasks[name]; !exists {
-			// Signal the task to stop
 			s.stopChan <- struct{}{}
 		}
 	}
 
-	// Update the tasks map
 	s.tasks = newTasks
 	s.lastConfigMod = time.Now()
 
@@ -221,16 +210,22 @@ func (s *Scheduler) LoadTasks(configPath string, configReloadInterval time.Durat
 }
 
 // createHandler creates a task handler based on the function type
-func (s *Scheduler) createHandler(functionType string, symbol string, args *FunctionArgs) TaskHandler {
-	return func(ctx context.Context, useCache bool) (interface{}, error) {
-		switch functionType {
-		case "GetLastTrade":
+func (s *Scheduler) createHandler(functionType string, symbol string, args *FunctionArgs) (TaskHandler, cache.DataType) {
+	var dataType cache.DataType
+
+	switch functionType {
+	case "GetLastTrade":
+		dataType = cache.LastTrades
+		return func(ctx context.Context, useCache bool) (interface{}, error) {
 			params := &models.GetLastTradeParams{
 				Ticker: symbol,
 			}
 			return s.client.GetLastTrade(ctx, params)
+		}, dataType
 
-		case "GetOptionData":
+	case "GetOptionData":
+		dataType = cache.OptionChains
+		return func(ctx context.Context, useCache bool) (interface{}, error) {
 			spotPrice, chain, err := s.client.GetOptionData(symbol, nil, nil)
 			if err != nil {
 				return nil, err
@@ -239,18 +234,23 @@ func (s *Scheduler) createHandler(functionType string, symbol string, args *Func
 				"spotPrice": spotPrice,
 				"chain":     chain,
 			}, nil
+		}, dataType
 
-		case "GetAggregates":
+	case "GetAggregates":
+		dataType = cache.Aggregates
+		return func(ctx context.Context, useCache bool) (interface{}, error) {
 			if args == nil {
 				return nil, fmt.Errorf("function args required for GetAggregates")
 			}
 			now := time.Now()
 			return s.client.GetAggregates(ctx, symbol, args.Multiplier, args.Timespan,
 				now.Add(-24*time.Hour).Unix(), now.Unix(), args.Adjusted)
+		}, dataType
 
-		default:
+	default:
+		return func(ctx context.Context, useCache bool) (interface{}, error) {
 			return nil, fmt.Errorf("unknown function type: %s", functionType)
-		}
+		}, ""
 	}
 }
 
@@ -331,26 +331,32 @@ func (s *Scheduler) runTask(task *Task) {
 // executeTask executes a single task
 func (s *Scheduler) executeTask(task *Task) {
 	ctx := context.Background()
-	cacheKey := fmt.Sprintf("task:%s", task.Name)
 
-	// Execute the task with useCache=false to force fresh data
+	// Try to get from cache first
+	if cachedData, err := s.cache.GetTyped(task.DataType, task.Symbol); err == nil {
+		var result interface{}
+		if err := json.Unmarshal([]byte(cachedData), &result); err == nil {
+			log.Printf("Task %s: using cached data", task.Name)
+			return
+		}
+	}
+
+	// Execute the task to get fresh data
 	result, err := task.Handler(ctx, false)
 	if err != nil {
 		log.Printf("Task %s failed: %v", task.Name, err)
 		return
 	}
 
-	// Cache the result if caching is enabled
-	if task.UseCache {
-		jsonData, err := json.Marshal(result)
-		if err != nil {
-			log.Printf("Task %s: failed to marshal result: %v", task.Name, err)
-			return
-		}
+	// Cache the result
+	jsonData, err := json.Marshal(result)
+	if err != nil {
+		log.Printf("Task %s: failed to marshal result: %v", task.Name, err)
+		return
+	}
 
-		if err := s.cache.Store(cacheKey, string(jsonData), task.TTL, task.Compression); err != nil {
-			log.Printf("Task %s: failed to cache result: %v", task.Name, err)
-		}
+	if err := s.cache.StoreTyped(task.DataType, task.Symbol, string(jsonData)); err != nil {
+		log.Printf("Task %s: failed to cache result: %v", task.Name, err)
 	}
 }
 
