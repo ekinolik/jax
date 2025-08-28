@@ -150,7 +150,7 @@ func startCacheAndCreateScheduler(cfg *config.Config) *scheduler.Scheduler {
 			},
 			cache.Aggregates: {
 				StorageType: cache.Disk,
-				TTL:         cfg.MarketCacheTTL, // Use existing config value
+				TTL:         cfg.AggregateCacheTTL, // Use existing config value
 				Compression: true,
 				KeyPrefix:   "aggs",
 			},

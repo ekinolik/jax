@@ -27,8 +27,9 @@ type Config struct {
 	PolygonAPIKey string
 
 	// Service-specific cache TTLs
-	DexCacheTTL    time.Duration
-	MarketCacheTTL time.Duration
+	DexCacheTTL       time.Duration
+	MarketCacheTTL    time.Duration
+	AggregateCacheTTL time.Duration
 
 	// Cache limits
 	MemoryCacheLimit int64
@@ -81,6 +82,12 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 	config.MarketCacheTTL = marketCacheTTL
+
+	aggregateCacheTTL, err := getEnvDurationWithDefault("JAX_AGGREGATE_CACHE_TTL", 15*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	config.AggregateCacheTTL = aggregateCacheTTL
 
 	// Load cache limits
 	memoryLimit, err := getEnvInt64WithDefault("JAX_MEMORY_CACHE_LIMIT", 50*1024*1024) // Default 50MB
