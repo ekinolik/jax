@@ -10,6 +10,7 @@ import (
 	"time"
 
 	optionv1 "github.com/ekinolik/jax/api/proto/option/v1"
+	"github.com/ekinolik/jax/internal/cache"
 	"github.com/ekinolik/jax/internal/config"
 	"github.com/ekinolik/jax/internal/polygon"
 	"github.com/polygon-io/client-go/rest/models"
@@ -23,11 +24,24 @@ type OptionService struct {
 	client *polygon.CachedClient
 }
 
-func NewOptionService(cfg *config.Config) *OptionService {
+func NewOptionService(cfg *config.Config, cacheManager cache.Cache) *OptionService {
+	client := polygon.NewCachedClient(cfg, cacheManager)
 	return &OptionService{
-		client: polygon.NewCachedClient(cfg),
+		client: client,
 	}
 }
+
+/*
+func NewOptionService(cfg *config.Config) (*OptionService, error) {
+	client, err := polygon.NewCachedClient(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cached client: %w", err)
+	}
+	return &OptionService{
+		client: client,
+	}, nil
+}
+*/
 
 type ExposureType int
 

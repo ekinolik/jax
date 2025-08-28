@@ -14,7 +14,10 @@ import (
 
 	marketv1 "github.com/ekinolik/jax/api/proto/market/v1"
 	optionv1 "github.com/ekinolik/jax/api/proto/option/v1"
+	"github.com/ekinolik/jax/internal/cache"
 	"github.com/ekinolik/jax/internal/config"
+	"github.com/ekinolik/jax/internal/polygon"
+	"github.com/ekinolik/jax/internal/scheduler"
 	"github.com/ekinolik/jax/internal/service"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -126,11 +129,61 @@ func chainInterceptors(interceptors ...grpc.UnaryServerInterceptor) grpc.UnarySe
 	}
 }
 
+func startCacheAndCreateScheduler(cfg *config.Config) *scheduler.Scheduler {
+	// Create cache manager with type-specific configurations
+	cacheConfig := cache.Config{
+		StorageType: cache.Disk,
+		BasePath:    cfg.CacheDir,
+		MaxSize:     cfg.DiskCacheLimit,
+		TypeConfigs: map[cache.DataType]cache.TypeConfig{
+			cache.OptionChains: {
+				StorageType: cache.Disk,
+				TTL:         cfg.DexCacheTTL, // Use existing config value
+				Compression: true,
+				KeyPrefix:   "options",
+			},
+			cache.LastTrades: {
+				StorageType: cache.Memory,
+				TTL:         cfg.MarketCacheTTL, // Use existing config value
+				Compression: false,
+				KeyPrefix:   "last-trade",
+			},
+			cache.Aggregates: {
+				StorageType: cache.Disk,
+				TTL:         cfg.AggregateCacheTTL, // Use existing config value
+				Compression: true,
+				KeyPrefix:   "aggs",
+			},
+		},
+	}
+	cacheManager, err := cache.NewManager(cacheConfig)
+	if err != nil {
+		log.Fatalf("Failed to create cache manager: %v", err)
+	}
+
+	// Create Polygon client
+	client := polygon.NewClient(cfg)
+
+	// Create scheduler
+	sched := scheduler.NewScheduler(cacheManager, client)
+
+	// Load tasks from configuration
+	if err := sched.LoadTasks("cache-configs/cache_tasks.yaml", time.Minute); err != nil {
+		log.Fatalf("Failed to load tasks: %v", err)
+	}
+
+	return sched
+}
+
 func main() {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
+
+	sched := startCacheAndCreateScheduler(cfg)
+	sched.Start()
+	defer sched.Stop()
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Port))
 	if err != nil {
@@ -150,10 +203,22 @@ func main() {
 	)
 
 	// Register services
-	optionService := service.NewOptionService(cfg)
+	/*
+		optionService, err := service.NewOptionService(cfg)
+		if err != nil {
+			log.Fatalf("failed to create option service: %v", err)
+		}
+	*/
+	optionService := service.NewOptionService(cfg, sched.GetCache())
 	optionv1.RegisterOptionServiceServer(s, optionService)
 
-	marketService := service.NewMarketService(cfg)
+	/*
+		marketService, err := service.NewMarketService(cfg)
+		if err != nil {
+			log.Fatalf("failed to create market service: %v", err)
+		}
+	*/
+	marketService := service.NewMarketService(cfg, sched.GetCache())
 	marketv1.RegisterMarketServiceServer(s, marketService)
 
 	// Register reflection service on gRPC server

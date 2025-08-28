@@ -2,10 +2,12 @@ package polygon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/ekinolik/jax/internal/cache"
 	"github.com/ekinolik/jax/internal/config"
 	"github.com/polygon-io/client-go/rest/models"
 )
@@ -22,35 +24,48 @@ type OptionDataEntry struct {
 
 type CachedClient struct {
 	client         *Client
-	cache          map[string]CacheEntry
+	cache          cache.Cache
 	cacheLock      sync.RWMutex
 	dexCacheTTL    time.Duration
 	marketCacheTTL time.Duration
 }
 
-func NewCachedClient(cfg *config.Config) *CachedClient {
+func NewCachedClient(cfg *config.Config, cacheManager cache.Cache) *CachedClient {
 	return &CachedClient{
 		client:         NewClient(cfg),
-		cache:          make(map[string]CacheEntry),
+		cache:          cacheManager,
 		dexCacheTTL:    cfg.DexCacheTTL,
 		marketCacheTTL: cfg.MarketCacheTTL,
 	}
 }
 
-func (c *CachedClient) GetOptionData(underlying string, startStrike, endStrike *float64) (float64, Chain, error) {
-	cacheKey := fmt.Sprintf("option_data:%s", underlying)
+/*
+func NewCachedClient(cfg *config.Config) (*CachedClient, error) {
+	cacheManager, err := cache.NewManager(cache.Config{
+		StorageType: cache.Memory,
+		MaxSize:     cfg.MemoryCacheLimit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cache manager: %w", err)
+	}
 
-	// Check cache
-	c.cacheLock.RLock()
-	if entry, ok := c.cache[cacheKey]; ok {
-		if time.Now().Before(entry.ExpiresAt) {
-			if data, ok := entry.Data.(*OptionDataEntry); ok {
-				c.cacheLock.RUnlock()
-				return data.SpotPrice, data.Chain, nil
-			}
+	return &CachedClient{
+		client:         NewClient(cfg),
+		cache:          cacheManager,
+		dexCacheTTL:    cfg.DexCacheTTL,
+		marketCacheTTL: cfg.MarketCacheTTL,
+	}, nil
+}
+*/
+
+func (c *CachedClient) GetOptionData(underlying string, startStrike, endStrike *float64) (float64, Chain, error) {
+	// Check cache using typed method
+	if cached, err := c.cache.GetTyped(cache.OptionChains, underlying); err == nil {
+		var data OptionDataEntry
+		if err := json.Unmarshal([]byte(cached), &data); err == nil {
+			return data.SpotPrice, data.Chain, nil
 		}
 	}
-	c.cacheLock.RUnlock()
 
 	// Fetch from Polygon
 	spotPrice, chain, err := c.client.GetOptionData(underlying, startStrike, endStrike)
@@ -64,22 +79,24 @@ func (c *CachedClient) GetOptionData(underlying string, startStrike, endStrike *
 		Chain:     chain,
 	}
 
-	c.cacheLock.Lock()
-	c.cache[cacheKey] = CacheEntry{
-		Data:      data,
-		ExpiresAt: time.Now().Add(c.dexCacheTTL),
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return spotPrice, chain, nil // Return data even if caching fails
 	}
-	c.cacheLock.Unlock()
+
+	if err := c.cache.StoreTyped(cache.OptionChains, underlying, string(jsonData)); err != nil {
+		return spotPrice, chain, nil // Return data even if caching fails
+	}
 
 	return spotPrice, chain, nil
 }
 
 func (c *CachedClient) GetCacheEntry(underlying string) *CacheEntry {
-	cacheKey := fmt.Sprintf("option_data:%s", underlying)
-	c.cacheLock.RLock()
-	defer c.cacheLock.RUnlock()
-	if entry, ok := c.cache[cacheKey]; ok {
-		return &entry
+	if _, err := c.cache.GetTyped(cache.OptionChains, underlying); err == nil {
+		return &CacheEntry{
+			Data:      nil, // We don't need the actual data here
+			ExpiresAt: time.Now().Add(c.dexCacheTTL),
+		}
 	}
 	return nil
 }
@@ -90,19 +107,13 @@ type LastTradeResponse struct {
 }
 
 func (c *CachedClient) GetLastTrade(ticker string) (*LastTradeResponse, bool, error) {
-	cacheKey := fmt.Sprintf("last_trade:%s", ticker)
-
-	// Check cache
-	c.cacheLock.RLock()
-	if entry, ok := c.cache[cacheKey]; ok {
-		if time.Now().Before(entry.ExpiresAt) {
-			if lastTrade, ok := entry.Data.(*LastTradeResponse); ok {
-				c.cacheLock.RUnlock()
-				return lastTrade, true, nil
-			}
+	// Check cache using typed method
+	if cached, err := c.cache.GetTyped(cache.LastTrades, ticker); err == nil {
+		var lastTrade LastTradeResponse
+		if err := json.Unmarshal([]byte(cached), &lastTrade); err == nil {
+			return &lastTrade, true, nil
 		}
 	}
-	c.cacheLock.RUnlock()
 
 	// Fetch from Polygon
 	params := &models.GetLastTradeParams{
@@ -120,12 +131,14 @@ func (c *CachedClient) GetLastTrade(ticker string) (*LastTradeResponse, bool, er
 		CachedAt: time.Now(),
 	}
 
-	c.cacheLock.Lock()
-	c.cache[cacheKey] = CacheEntry{
-		Data:      lastTrade,
-		ExpiresAt: time.Now().Add(c.marketCacheTTL),
+	jsonData, err := json.Marshal(lastTrade)
+	if err != nil {
+		return lastTrade, false, nil // Return data even if caching fails
 	}
-	c.cacheLock.Unlock()
+
+	if err := c.cache.StoreTyped(cache.LastTrades, ticker, string(jsonData)); err != nil {
+		return lastTrade, false, nil // Return data even if caching fails
+	}
 
 	return lastTrade, false, nil
 }
@@ -144,19 +157,16 @@ type AggregatesResponse struct {
 }
 
 func (c *CachedClient) GetAggregates(ticker string, multiplier int, timespan string, from, to int64, adjusted bool) (*AggregatesResponse, bool, error) {
-	cacheKey := fmt.Sprintf("aggregates:%s:%d:%s:%d:%d:%t", ticker, multiplier, timespan, from, to, adjusted)
+	// Create a unique identifier for this aggregates request
+	aggregateID := fmt.Sprintf("%s:%d:%s:%d:%d:%t", ticker, multiplier, timespan, from, to, adjusted)
 
-	// Check cache
-	c.cacheLock.RLock()
-	if entry, ok := c.cache[cacheKey]; ok {
-		if time.Now().Before(entry.ExpiresAt) {
-			if aggs, ok := entry.Data.(*AggregatesResponse); ok {
-				c.cacheLock.RUnlock()
-				return aggs, true, nil
-			}
+	// Check cache using typed method
+	if cached, err := c.cache.GetTyped(cache.Aggregates, aggregateID); err == nil {
+		var aggs AggregatesResponse
+		if err := json.Unmarshal([]byte(cached), &aggs); err == nil {
+			return &aggs, true, nil
 		}
 	}
-	c.cacheLock.RUnlock()
 
 	// Fetch from Polygon
 	aggs, err := c.client.GetAggregates(context.Background(), ticker, multiplier, timespan, from, to, adjusted)
@@ -170,12 +180,14 @@ func (c *CachedClient) GetAggregates(ticker string, multiplier int, timespan str
 		CachedAt: time.Now(),
 	}
 
-	c.cacheLock.Lock()
-	c.cache[cacheKey] = CacheEntry{
-		Data:      response,
-		ExpiresAt: time.Now().Add(c.marketCacheTTL),
+	jsonData, err := json.Marshal(response)
+	if err != nil {
+		return response, false, nil // Return data even if caching fails
 	}
-	c.cacheLock.Unlock()
+
+	if err := c.cache.StoreTyped(cache.Aggregates, aggregateID, string(jsonData)); err != nil {
+		return response, false, nil // Return data even if caching fails
+	}
 
 	return response, false, nil
 }

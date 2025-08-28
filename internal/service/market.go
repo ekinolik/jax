@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	//"fmt"
 	"log"
 	"strconv"
 	"time"
 
 	marketv1 "github.com/ekinolik/jax/api/proto/market/v1"
+	"github.com/ekinolik/jax/internal/cache"
 	"github.com/ekinolik/jax/internal/config"
 	"github.com/ekinolik/jax/internal/polygon"
 	"google.golang.org/grpc/codes"
@@ -18,11 +20,24 @@ type MarketService struct {
 	client *polygon.CachedClient
 }
 
-func NewMarketService(cfg *config.Config) *MarketService {
+func NewMarketService(cfg *config.Config, cacheManager cache.Cache) *MarketService {
+	client := polygon.NewCachedClient(cfg, cacheManager)
 	return &MarketService{
-		client: polygon.NewCachedClient(cfg),
+		client: client,
 	}
 }
+
+/*
+func NewMarketService(cfg *config.Config) (*MarketService, error) {
+	client, err := polygon.NewCachedClient(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cached client: %w", err)
+	}
+	return &MarketService{
+		client: client,
+	}, nil
+}
+*/
 
 func (s *MarketService) GetLastTrade(ctx context.Context, req *marketv1.GetLastTradeRequest) (*marketv1.GetLastTradeResponse, error) {
 	// Log request

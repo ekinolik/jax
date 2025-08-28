@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -28,8 +27,15 @@ type Config struct {
 	PolygonAPIKey string
 
 	// Service-specific cache TTLs
-	DexCacheTTL    time.Duration
-	MarketCacheTTL time.Duration
+	DexCacheTTL       time.Duration
+	MarketCacheTTL    time.Duration
+	AggregateCacheTTL time.Duration
+
+	// Cache limits
+	MemoryCacheLimit int64
+	DiskCacheLimit   int64
+	CacheDir         string
+	NumExecutors     int // Number of cache task executors
 
 	// Environment
 	Env Environment
@@ -38,10 +44,7 @@ type Config struct {
 // LoadConfig loads configuration from environment variables and .env files
 func LoadConfig() (*Config, error) {
 	// Load .env files in order of precedence
-	env := os.Getenv("JAX_ENV")
-	if env == "" {
-		env = "local"
-	}
+	env := getEnvWithDefault("JAX_ENV", "local")
 
 	// Load environment-specific .env file first
 	_ = godotenv.Load(fmt.Sprintf(".env.%s", env))
@@ -53,21 +56,13 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// Load server configuration
-	port := os.Getenv("JAX_PORT")
-	if port == "" {
-		config.Port = 50051 // Default port
-	} else {
-		p, err := strconv.Atoi(port)
-		if err != nil {
-			return nil, fmt.Errorf("invalid port number: %s", port)
-		}
-		config.Port = p
+	port, err := getEnvInt64WithDefault("JAX_PORT", 50051)
+	if err != nil {
+		return nil, err
 	}
+	config.Port = int(port)
 
-	config.GRPCHost = os.Getenv("JAX_GRPC_HOST")
-	if config.GRPCHost == "" {
-		config.GRPCHost = fmt.Sprintf(":%d", config.Port)
-	}
+	config.GRPCHost = getEnvWithDefault("JAX_GRPC_HOST", fmt.Sprintf(":%d", config.Port))
 
 	// Load Polygon configuration
 	config.PolygonAPIKey = os.Getenv("POLYGON_API_KEY")
@@ -75,29 +70,50 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("POLYGON_API_KEY is required")
 	}
 
-	// Load DEX cache configuration
-	dexCacheTTL := os.Getenv("JAX_DEX_CACHE_TTL")
-	if dexCacheTTL == "" {
-		config.DexCacheTTL = 15 * time.Minute // Default DEX cache TTL
-	} else {
-		duration, err := time.ParseDuration(dexCacheTTL)
-		if err != nil {
-			return nil, fmt.Errorf("invalid DEX cache TTL duration: %s", dexCacheTTL)
-		}
-		config.DexCacheTTL = duration
+	// Load cache TTLs
+	dexCacheTTL, err := getEnvDurationWithDefault("JAX_DEX_CACHE_TTL", 15*time.Minute)
+	if err != nil {
+		return nil, err
 	}
+	config.DexCacheTTL = dexCacheTTL
 
-	// Load Market cache configuration
-	marketCacheTTL := os.Getenv("JAX_MARKET_CACHE_TTL")
-	if marketCacheTTL == "" {
-		config.MarketCacheTTL = time.Second // Default market cache TTL
-	} else {
-		duration, err := time.ParseDuration(marketCacheTTL)
-		if err != nil {
-			return nil, fmt.Errorf("invalid market cache TTL duration: %s", marketCacheTTL)
-		}
-		config.MarketCacheTTL = duration
+	marketCacheTTL, err := getEnvDurationWithDefault("JAX_MARKET_CACHE_TTL", 60*time.Second)
+	if err != nil {
+		return nil, err
 	}
+	config.MarketCacheTTL = marketCacheTTL
+
+	aggregateCacheTTL, err := getEnvDurationWithDefault("JAX_AGGREGATE_CACHE_TTL", 15*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	config.AggregateCacheTTL = aggregateCacheTTL
+
+	// Load cache limits
+	memoryLimit, err := getEnvInt64WithDefault("JAX_MEMORY_CACHE_LIMIT", 50*1024*1024) // Default 50MB
+	if err != nil {
+		return nil, err
+	}
+	config.MemoryCacheLimit = memoryLimit
+
+	diskLimit, err := getEnvInt64WithDefault("JAX_DISK_CACHE_LIMIT", 2*1024*1024*1024) // Default 2GB
+	if err != nil {
+		return nil, err
+	}
+	config.DiskCacheLimit = diskLimit
+
+	// Load cache directory
+	config.CacheDir = getEnvWithDefault("JAX_CACHE_DIR", "cache")
+
+	// Load number of executors
+	numExecutors, err := getEnvIntWithDefault("JAX_NUM_EXECUTORS", 1) // Default to 1 executor
+	if err != nil {
+		return nil, err
+	}
+	if numExecutors < 1 {
+		return nil, fmt.Errorf("JAX_NUM_EXECUTORS must be at least 1")
+	}
+	config.NumExecutors = numExecutors
 
 	return config, nil
 }

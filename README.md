@@ -128,25 +128,81 @@ The response includes:
 
 ## Caching Strategy
 
-The service implements an efficient caching mechanism to minimize API calls to Polygon.io:
+The service implements a sophisticated caching mechanism to minimize API calls to Polygon.io and optimize performance:
+
+### Cache Types
+
+1. Frequent Cache (Real-time)
+   - Used for rapidly changing data like last trade prices
+   - Stored in memory
+   - Very short TTL (configurable, default 1 second)
+   - Updated on-demand when data is requested
+
+2. Regular Interval Cache
+   - Used for data that needs periodic updates
+   - Can be configured to run during specific hours
+   - Supports both memory and disk storage
+   - Example: Option volume data updated every 30 minutes during market hours
+
+3. Timed Update Cache
+   - Used for data that updates at specific times
+   - Can be configured to run at exact times daily
+   - Typically uses disk storage for persistence
+   - Example: Option open interest updated at 8am and 2pm
 
 ### Cache Implementation
-- In-memory cache with 15-minute TTL
-- Caches full option chain data per underlying asset
+- In-memory cache with configurable limit (default 50MB)
+- Disk cache with configurable limit (default 2GB)
 - Thread-safe implementation using mutex locks
-- Cache expiration time is communicated to clients
+- Compression support for disk cache
+- Automatic cache expiration
+- Cache size monitoring and limits enforcement
+
+### Cache Configuration
+The following environment variables can be used to configure the cache:
+
+```bash
+# Cache TTLs
+JAX_DEX_CACHE_TTL=15m        # Default 15 minutes
+JAX_MARKET_CACHE_TTL=1s      # Default 1 second
+
+# Cache Limits
+JAX_MEMORY_CACHE_LIMIT=52428800     # Default 50MB (in bytes)
+JAX_DISK_CACHE_LIMIT=2147483648     # Default 2GB (in bytes)
+JAX_CACHE_DIR=cache                 # Default cache directory
+
+# Task Execution
+JAX_NUM_EXECUTORS=3                 # Default 3 executors (min: 1)
+```
+
+The number of executors determines how many cache tasks can be processed concurrently. More executors can improve throughput but will consume more system resources. Choose a value based on:
+- Available system resources (CPU, memory)
+- Expected task load
+- Task execution patterns
+- API rate limits
+
+For most use cases, the default of 3 executors provides a good balance between performance and resource usage.
 
 ### Cache Behavior
-- First request for an asset fetches all strike prices
-- Subsequent requests for the same asset use cached data
-- Strike price filtering is performed post-cache
-- Cache is cleared on server restart
+- Small data (<10KB) is automatically stored in memory
+- Larger data is stored on disk with optional compression
+- Cache entries include size tracking and expiration time
+- Cache is cleared on service restart
+- Failed cache updates are retried with exponential backoff
 
 ### Benefits
 - Reduced Polygon.io API calls
 - Lower latency for cached responses
-- Efficient memory usage
-- Support for multiple strike ranges from single cache entry
+- Efficient memory and disk usage
+- Support for different data update patterns
+- Automatic recovery from failures
+
+### Cache Monitoring
+The service logs the following cache-related events:
+- Cache hits/misses
+- Cache size warnings
+- Failed cache updates
+- Cache cleanup operations
 
 ## Authentication
 
