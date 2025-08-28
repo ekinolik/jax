@@ -161,9 +161,7 @@ func (c *CachedClient) GetAggregates(ticker string, multiplier int, timespan str
 	aggregateID := fmt.Sprintf("%s:%d:%s:%d:%d:%t", ticker, multiplier, timespan, from, to, adjusted)
 
 	// Check cache using typed method
-	fmt.Println("Checking cache for", aggregateID)
 	if cached, err := c.cache.GetTyped(cache.Aggregates, aggregateID); err == nil {
-		fmt.Println("Found in cache")
 		var aggs AggregatesResponse
 		if err := json.Unmarshal([]byte(cached), &aggs); err == nil {
 			return &aggs, true, nil

@@ -24,19 +24,19 @@ func newMockCache() *mockCache {
 	}
 }
 
-func (m *mockCache) Store(key string, value string, ttl time.Duration, compress bool) error {
+func (m *mockCache) Store(key string, value string, dataType cache.DataType, ttl time.Duration, compress bool) error {
 	m.data[key] = value
 	return nil
 }
 
-func (m *mockCache) Get(key string) (string, error) {
+func (m *mockCache) Get(key string, dataType cache.DataType) (string, error) {
 	if value, ok := m.data[key]; ok {
 		return value, nil
 	}
 	return "", cache.ErrNotFound
 }
 
-func (m *mockCache) Delete(key string) error {
+func (m *mockCache) Delete(key string, dataType cache.DataType) error {
 	delete(m.data, key)
 	return nil
 }

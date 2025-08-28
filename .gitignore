@@ -35,7 +35,7 @@ grpcurl-test-commands.sh
 bin/
 package/
 examples/
-cache/
+/cache/
 .go.local
 
 *~

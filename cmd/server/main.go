@@ -146,7 +146,7 @@ func startCacheAndCreateScheduler(cfg *config.Config) *scheduler.Scheduler {
 				StorageType: cache.Memory,
 				TTL:         cfg.MarketCacheTTL, // Use existing config value
 				Compression: false,
-				KeyPrefix:   "trades",
+				KeyPrefix:   "last-trade",
 			},
 			cache.Aggregates: {
 				StorageType: cache.Disk,

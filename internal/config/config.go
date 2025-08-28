@@ -77,7 +77,7 @@ func LoadConfig() (*Config, error) {
 	}
 	config.DexCacheTTL = dexCacheTTL
 
-	marketCacheTTL, err := getEnvDurationWithDefault("JAX_MARKET_CACHE_TTL", time.Second)
+	marketCacheTTL, err := getEnvDurationWithDefault("JAX_MARKET_CACHE_TTL", 60*time.Second)
 	if err != nil {
 		return nil, err
 	}
