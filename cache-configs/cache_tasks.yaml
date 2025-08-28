@@ -7,7 +7,7 @@ cache_tasks:
       - SPY
       - QQQ
     function: GetLastTrade
-    interval: 1s
+    interval: 1m
     cache:
       type: memory
       size_bytes: 1024  # 1KB per symbol

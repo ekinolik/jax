@@ -203,7 +203,6 @@ func (s *Scheduler) startConfigReloader(interval time.Duration) {
 // LoadTasks loads tasks from the YAML configuration file
 func (s *Scheduler) LoadTasks(configPath string, configReloadInterval time.Duration) error {
 	s.configPath = configPath
-	s.lastConfigMod = time.Now()
 
 	if err := s.reloadConfig(); err != nil {
 		return err
