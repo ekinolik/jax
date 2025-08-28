@@ -26,23 +26,23 @@ go.work.sum
 .env.*
 !.env.example
 
-clients/react/dist/
-clients/react/node_modules/
-clients/reach/.DS_Store
+/clients/react/dist/
+/clients/react/node_modules/
+/clients/reach/.DS_Store
 
 grpcurl-test-commands.sh
 
-bin/
-package/
-examples/
+/bin/
+/package/
+/examples/
 /cache/
 .go.local
 
 *~
 
-certs/
-client-certs/
+/certs/
+/client-certs/
 *.crt
 *.key
 *.pem
-clients/react/test/integration/certs/
+/clients/react/test/integration/certs/
