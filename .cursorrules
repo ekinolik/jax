@@ -262,3 +262,32 @@ By following this structure and guidelines, you'll provide comprehensive and pra
 - In-memory cache limited to 50MB maximum
 - Disk cache limited to 2GB maximum
 - Cache TTL based on configuration parameters
+
+# Client Development Guidelines
+- The clients/ directory contains multiple client implementations for the JAX service
+- Each client is developed independently from the main server code
+- Client architecture follows a distributed development model:
+  * React/TypeScript client: Git submodule (independent repository)
+  * Swift client: Git submodule (independent repository)  
+  * Go client: Part of main repository (same language as server)
+- All clients except the Go client are git submodules with their own repositories
+- Clients must be developed independently of server implementation details
+- When updating server APIs, coordinate with client maintainers for updates
+- Each client should have its own:
+  * Build system and dependencies
+  * Testing framework and test suites
+  * Documentation and README
+  * Version management and release process
+  * CI/CD pipeline (where applicable)
+- Client development principles:
+  * Write clients independently of server code
+  * Design for easy updates when server APIs change
+  * Implement comprehensive testing strategies
+  * Ensure easy deployment and maintenance
+  * Focus on code clarity and documentation
+  * Optimize for debugging and troubleshooting
+  * Prioritize user experience and ease of use
+- Protocol Buffer definitions serve as the contract between server and clients
+- Clients should handle API versioning and backward compatibility
+- Implement proper error handling and retry logic in all clients
+- Consider rate limiting and cost implications in client implementations

@@ -4,3 +4,6 @@
 [submodule "clients/react"]
 	path = clients/react
 	url = https://github.com/ekinolik/jax-react-client
+[submodule "clients/swift"]
+	path = clients/swift
+	url = https://github.com/ekinolik/jax-swift-client
