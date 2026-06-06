@@ -108,9 +108,9 @@ func (p *Processor) runBootstrapFetch(ctx context.Context, ticker string) (*pkgc
 		slices = append(slices, *slice)
 	}
 
-	rsi, _, err := p.fetchRSI(ctx, ticker)
-	if err != nil {
-		return nil, fmt.Errorf("RSI for %s: %w", ticker, err)
+	rsi, _, rsiErr := p.fetchRSI(ctx, ticker)
+	if rsiErr != nil {
+		log.Printf("[confluence] bootstrap RSI %s: %v", ticker, rsiErr)
 	}
 
 	sectorETF := p.defaultSectorETF()
@@ -180,26 +180,31 @@ func (p *Processor) runBootstrapFetch(ctx context.Context, ticker string) (*pkgc
 	p.registry.SetOIState(ticker, pkgconfluence.OIStatusReady)
 
 	scoreInput := pkgconfluence.ScoreInput{
-		Ticker:       ticker,
-		Spot:         spot,
-		SpotTime:     spotTime,
-		Slices:       slices,
-		OIStatus:     pkgconfluence.OIStatusReady,
-		MarketStatus: marketStatus,
-		RSI:          rsi,
-		SPYOpen:      spyDay.Open,
-		SPYSpot:      spySpot,
-		QQQOpen:      qqqDay.Open,
-		QQQSpot:      qqqSpot,
-		TargetOpen:   targetDay.Open,
-		ETFOpen:      etfDay.Open,
-		ETFSpot:      etfSpot,
-		SectorETF:    sectorETF,
-		IntradayHigh: targetDay.High,
-		IntradayLow:  targetDay.Low,
-		Now:          now,
-		DataAsOf:     dataAsOf,
+		Ticker:        ticker,
+		Spot:          spot,
+		SpotTime:      spotTime,
+		Slices:        slices,
+		OIStatus:      pkgconfluence.OIStatusReady,
+		MarketStatus:  marketStatus,
+		RSI:           rsi,
+		SPYOpen:       spyDay.Open,
+		SPYSpot:       spySpot,
+		QQQOpen:       qqqDay.Open,
+		QQQSpot:       qqqSpot,
+		TargetOpen:    targetDay.Open,
+		ETFOpen:       etfDay.Open,
+		ETFSpot:       etfSpot,
+		SectorETF:     sectorETF,
+		IntradayHigh:  targetDay.High,
+		IntradayLow:   targetDay.Low,
+		SessionOpen:   targetDay.Open,
+		SessionVolume: targetDay.Volume,
+		SessionVWAP:   targetDay.VWAP,
+		Now:           now,
+		DataAsOf:      dataAsOf,
+		Settings:      p.settings,
 	}
+	p.EnrichScoreInput(ctx, ticker, &scoreInput, now)
 
 	snap, err := p.RecomputeSnapshot(ticker, scoreInput, now)
 	if err != nil {

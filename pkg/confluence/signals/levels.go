@@ -407,3 +407,93 @@ func Rank1DEXSupport(levels confluence.Levels) (confluence.Level, bool) {
 	}
 	return confluence.Level{}, false
 }
+
+// Rank1Resistance returns the strongest resistance level (rank 1) above spot.
+func Rank1Resistance(levels confluence.Levels) (confluence.Level, bool) {
+	if len(levels.Resistance) == 0 {
+		return confluence.Level{}, false
+	}
+	return levels.Resistance[0], true
+}
+
+// Rank2Resistance returns the second-ranked resistance level, if present.
+func Rank2Resistance(levels confluence.Levels) (confluence.Level, bool) {
+	if len(levels.Resistance) < 2 {
+		return confluence.Level{}, false
+	}
+	return levels.Resistance[1], true
+}
+
+// SecondSupport returns the second-ranked support below spot (stop reference).
+func SecondSupport(levels confluence.Levels) (confluence.Level, bool) {
+	if len(levels.Support) < 2 {
+		return confluence.Level{}, false
+	}
+	return levels.Support[1], true
+}
+
+// Rank1GEXResistance returns the highest-ranked GEX resistance above spot.
+func Rank1GEXResistance(levels confluence.Levels) (confluence.Level, bool) {
+	for _, lvl := range levels.Resistance {
+		if lvl.Source == confluence.LevelSourceGEX {
+			return lvl, true
+		}
+	}
+	return confluence.Level{}, false
+}
+
+// Rank1DEXResistance returns the highest-ranked DEX resistance above spot.
+func Rank1DEXResistance(levels confluence.Levels) (confluence.Level, bool) {
+	for _, lvl := range levels.Resistance {
+		if lvl.Source == confluence.LevelSourceDEX {
+			return lvl, true
+		}
+	}
+	return confluence.Level{}, false
+}
+
+// TradeGeometry computes upside/downside room from the level ladder.
+func TradeGeometry(spot float64, levels confluence.Levels) confluence.TradeGeometry {
+	geo := confluence.TradeGeometry{}
+	if spot <= 0 {
+		return geo
+	}
+
+	var upsideTarget float64
+	if r1, ok := Rank1Resistance(levels); ok && r1.Price > spot {
+		upsideTarget = r1.Price
+		geo.HasUpside = true
+	} else if levels.HasNearestResistance && levels.NearestResistance > spot {
+		upsideTarget = levels.NearestResistance
+		geo.HasUpside = true
+	}
+	if geo.HasUpside {
+		geo.UpsideTarget = upsideTarget
+		geo.UpsidePct = (upsideTarget - spot) / spot
+	}
+
+	var stopPrice float64
+	if s2, ok := SecondSupport(levels); ok && s2.Price < spot {
+		stopPrice = s2.Price
+		geo.HasDownside = true
+	} else if levels.GammaFlip > 0 && levels.GammaFlip < spot {
+		dist := (spot - levels.GammaFlip) / spot
+		if dist <= 0.05 {
+			stopPrice = levels.GammaFlip
+			geo.HasDownside = true
+		}
+	}
+	if !geo.HasDownside {
+		stopPrice = spot * 0.98
+		geo.HasDownside = true
+		geo.StopEstimated = true
+	}
+	geo.StopSupport = stopPrice
+	geo.DownsidePct = (spot - stopPrice) / spot
+
+	denom := math.Max(geo.DownsidePct, 0.001)
+	if geo.HasUpside {
+		geo.RiskReward = geo.UpsidePct / denom
+	}
+	return geo
+}

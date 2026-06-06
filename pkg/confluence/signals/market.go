@@ -16,14 +16,18 @@ type MarketInput struct {
 	SPYSpot float64
 	QQQOpen float64
 	QQQSpot float64
+	Weight  float64
 }
 
 // ComputeMarket scores broad market strength from SPY and QQQ day change vs open.
 func ComputeMarket(in MarketInput) confluence.Signal {
 	signal := confluence.Signal{
 		Name:   "market",
-		Weight: 0.20,
+		Weight: in.Weight,
 		Icon:   confluence.IconMarket,
+	}
+	if signal.Weight == 0 {
+		signal.Weight = 0.08
 	}
 
 	if in.SPYOpen <= 0 || in.SPYSpot <= 0 || in.QQQOpen <= 0 || in.QQQSpot <= 0 {

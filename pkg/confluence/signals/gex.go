@@ -18,14 +18,18 @@ const (
 type GammaInput struct {
 	Spot   float64
 	Levels confluence.Levels
+	Weight float64
 }
 
 // ComputeGammaSupport scores proximity to rank-1 GEX support and stacked-zone bonus.
 func ComputeGammaSupport(in GammaInput) confluence.Signal {
 	signal := confluence.Signal{
 		Name:   "gamma_support",
-		Weight: 0.25,
+		Weight: in.Weight,
 		Icon:   confluence.IconGamma,
+	}
+	if signal.Weight == 0 {
+		signal.Weight = 0.16
 	}
 
 	support, ok := Rank1GEXSupport(in.Levels)

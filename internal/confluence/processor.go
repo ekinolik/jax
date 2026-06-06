@@ -34,6 +34,21 @@ type Processor struct {
 	dayStatsMu sync.Mutex
 	dayStats   map[string]DayStats
 
+	dailyBarsMu sync.Mutex
+	dailyBars   map[string][]pkgconfluence.DailyBar
+
+	rsiDailyMu sync.Mutex
+	rsiDaily   map[string]float64
+
+	siMu          sync.Mutex
+	shortInterest map[string]cachedShortInterest
+
+	shortVolMu      sync.Mutex
+	shortVolRatio   map[string]float64
+
+	floatMu    sync.Mutex
+	floatCache map[string]tickerFloatCache
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -67,7 +82,12 @@ func NewProcessor(
 		snapshots:     make(map[string]*pkgconfluence.ConfluenceSnapshot),
 		tickers:       make(map[string]*tickerRuntime),
 		benchmarkRefs: make(map[string]int),
-		dayStats:      make(map[string]DayStats),
+		dayStats:        make(map[string]DayStats),
+		dailyBars:       make(map[string][]pkgconfluence.DailyBar),
+		rsiDaily:        make(map[string]float64),
+		shortInterest:   make(map[string]cachedShortInterest),
+		shortVolRatio:   make(map[string]float64),
+		floatCache:      make(map[string]tickerFloatCache),
 	}
 }
 
@@ -194,6 +214,9 @@ func (p *Processor) RecomputeSnapshot(ticker string, in pkgconfluence.ScoreInput
 	in.OIStatus = oiStatus
 	in.MarketStatus = status
 	in.Now = now
+	if in.Settings == nil {
+		in.Settings = p.settings
+	}
 
 	snap = new(pkgconfluence.ConfluenceSnapshot)
 	*snap = signals.BuildSnapshot(in)

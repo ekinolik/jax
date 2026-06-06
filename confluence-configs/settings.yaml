@@ -36,3 +36,29 @@ tuning:
   greeks_interval_sec: 90       # min interval between greeks refreshes per active ticker
   recompute_debounce_sec: 5     # batch spot ticks before full score + RSI recompute
   max_rsi_calls_per_minute: 12  # global guard across active tickers (~1 per 5s debounce)
+
+# v2 buy signal weights (sum = 1.00); sector > market
+signal_weights:
+  gamma_support: 0.16
+  delta_support: 0.10
+  rsi_minute: 0.12
+  rsi_daily: 0.03
+  sector: 0.18
+  market: 0.08
+  upside: 0.07
+  downside: 0.03
+  adr: 0.05
+  gamma_environment: 0.04
+  gamma_directional: 0.06
+  short_squeeze: 0.08
+
+scoring:
+  min_upside_pct: 0.03
+  upside_great_pct: 0.06
+  adr_spike_ratio_warn: 1.4
+  adr_5d_spike_floor_pct: 4.0
+  adr_30d_spike_ceiling_pct: 3.0
+  min_risk_reward: 1.5
+  neutral_gamma_band_pct: 0.003
+  compound_squeeze_bonus: 10
+  gamma_directional_buy_cap: -8

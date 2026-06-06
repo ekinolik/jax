@@ -19,14 +19,18 @@ type SectorInput struct {
 	ETFSpot      float64
 	ETFOpen      float64
 	SectorETF    string
+	Weight       float64
 }
 
 // ComputeSector scores target vs resolved sector ETF day change.
 func ComputeSector(in SectorInput) confluence.Signal {
 	signal := confluence.Signal{
 		Name:   "sector",
-		Weight: 0.20,
+		Weight: in.Weight,
 		Icon:   confluence.IconSector,
+	}
+	if signal.Weight == 0 {
+		signal.Weight = 0.18
 	}
 
 	if in.TargetOpen <= 0 || in.TargetSpot <= 0 || in.ETFOpen <= 0 || in.ETFSpot <= 0 {

@@ -8,7 +8,7 @@ How to paste JAX Confluence JSON snapshots into Claude, OpenAI, or another LLM t
 
 ## 1. Purpose
 
-JAX Confluence scores each ticker on a **0–100 composite** from five weighted signals (gamma/delta support, RSI, market, sector). The system is **entry-biased for oversold mean-reversion longs**: spot near options-derived support, RSI ≤ 35 favored, broad market and sector not fighting the trade.
+JAX Confluence **v2** scores each ticker on a **0–100 buy composite** from twelve weighted signals (gamma/delta support, RSI minute + daily, sector, market, upside/downside geometry, ADR, gamma regime, short squeeze) plus a parallel **sell score** for long exits. The system supports two long archetypes: **mean-reversion** (positive/neutral gamma, support entries) and **squeeze momentum** (negative gamma, above call wall, elevated SI/RVOL).
 
 Use an LLM to:
 
@@ -56,7 +56,16 @@ Proto JSON uses **snake_case**. This is the preferred format for LLM prompts.
 | `readiness` | string | `no_trade`, `caution`, `possible_entry`, `high_conviction` |
 | `oi_status` | string | `ready`, `loading`, `error` |
 | `market_status` | string | `open`, `closed` |
-| `signals` | array | Five axes (see glossary) |
+| `signals` / `buy_signals` | array | Twelve buy axes (see glossary); `signals` mirrors `buy_signals` for compat |
+| `sell_signals` | array | Six sell axes for long exits |
+| `sell_score` | float | 0–100 exit conviction |
+| `sell_readiness` | string | `hold`, `watch`, `consider_trim`, `take_profit` |
+| `exit_action` | string | `hold`, `trim`, `sell_all` |
+| `distance_to_exit` | string | `early`, `ideal`, `late` vs rank-1 resistance |
+| `upside_pct` / `downside_pct` / `risk_reward` | float | Trade geometry to rank-1 resistance / second support |
+| `adr_30d_pct` / `adr_5d_pct` / `adr_regime` | float/string | Dual-window ADR suitability |
+| `rsi_daily` | float | RSI-14 daily (lower weight than minute) |
+| `gamma_regime` / `gamma_squeeze_active` / `short_squeeze_active` | string/bool | Volatility amplifier state |
 | `levels` | object | Support/resistance ladder |
 | `daily_range_position` | float | 0 = at intraday low, 1 = at intraday high |
 | `distance_to_entry` | string | `early`, `ideal`, `late` |
@@ -143,27 +152,48 @@ Strategy context: **day-trading mean-reversion long** — buy weakness into opti
 | `nearest_support` | Closest support at or below spot (if `has_nearest_support`). |
 | `nearest_resistance` | Closest resistance at or above spot (if `has_nearest_resistance`). For longs, note overhead resistance distance. |
 
-### `signals[]` — five axes (weights sum to 100%)
+### `buy_signals[]` — twelve axes (weights sum to 100%, `confluence-configs/settings.yaml`)
 
-Each signal has: `name`, `weight`, `axis_fill` (0–1), `status` (`aligned` / `neutral` / `against`), `icon`, `score` (axis_fill × weight × 100), `detail` (human-readable).
+Each signal has: `name`, `weight`, `axis_fill` (0–1), `status` (`aligned` / `neutral` / `against`), `icon`, `score` (axis_fill × weight × 100), `detail`.
 
-| `name` | Weight | Icon | Aligned means (long bias) |
-|--------|--------|------|---------------------------|
-| `gamma_support` | 25% | G | Spot near **rank-1 GEX support** below price (≤0.5% above = full fill). Stacked zone adds up to +0.15 axis fill. |
-| `delta_support` | 15% | D | Spot near **rank-1 DEX support** below price (≤0.8% above = full fill). |
-| `rsi` | 20% | R | RSI-14 **≤ 35** (oversold). RSI > 55 → `against`. |
-| `market` | 20% | M | SPY and QQQ **not weak** vs day open (both ≥ −0.2% ideal; both < −0.5% → `against`). |
-| `sector` | 20% | S | Target **not lagging** sector ETF day change; ETF itself not deeply red. |
+| `name` | Weight | Aligned means (long bias) |
+|--------|--------|---------------------------|
+| `gamma_support` | 16% | Spot near rank-1 GEX support; stacked zone bonus |
+| `delta_support` | 10% | Spot near rank-1 DEX support |
+| `rsi_minute` | 12% | RSI-14 minute ≤ 35 (oversold timing) |
+| `rsi_daily` | 3% | RSI-14 daily oversold (softer curve) |
+| `sector` | 18% | Target not lagging sector ETF (**sector > market**) |
+| `market` | 8% | SPY/QQQ not weak vs open |
+| `upside` | 7% | Room to rank-1 resistance; **hard gate: <3% caps readiness at caution** |
+| `downside` | 3% | Tight stop / R/R ≥ 1.5 favored |
+| `adr` | 5% | Sustained 30d ADR + regime modifier; `spike_warning` caps readiness |
+| `gamma_environment` | 4% | Negative gamma = trend fuel (+); positive = pinning (−) |
+| `gamma_directional` | 6% | Bullish setup above call wall + VWAP + RVOL; **≤ −8 caps readiness** |
+| `short_squeeze` | 8% | `pressure × trigger` (SI/DTC/short-vol × gamma/breakout fuel) |
 
-**`axis_fill`:** 0–1 strength on that axis before weighting. **`status`:** `aligned` (fill ≥ 0.7), `neutral` (0.35–0.69), `against` (< 0.35 or explicit penalty, e.g. weak market).
+**Compound squeeze bonus:** +10 when both `gamma_squeeze_active` and `short_squeeze_active`.
 
-When `oi_status` is `loading`, `gamma_support` and `delta_support` are neutral placeholders (`detail`: `"OI loading"`) — max achievable score is roughly **60** (RSI + market + sector only).
+**Trade archetype tags** (LLM should assign): `mean_reversion`, `squeeze_momentum`, `mixed`, `avoid`.
 
-### Scoring reference (from `pkg/confluence/score.go`, `confluence-configs/settings.yaml`)
+### `sell_signals[]` — long exits only
 
-- Readiness thresholds: 75 / 55 / 35
+| `name` | Weight | Meaning |
+|--------|--------|---------|
+| `resistance_proximity` | 30% | Near rank-1 resistance |
+| `rsi_minute_exit` | 25% | RSI > 65–70 overbought |
+| `rsi_daily_exit` | 10% | Daily RSI > 60 |
+| `upside_exhausted` | 20% | <1% room to resistance |
+| `market_sector_extended` | 15% | Selling into SPY/QQQ/sector strength |
+
+**`exit_action`:** `trim` when rank-2 resistance offers ≥3% beyond rank-1 with strength ≥0.5; else `sell_all` near resistance. Squeeze unwind overlays boost sell score when gamma squeeze fades below VWAP.
+
+### Scoring reference (v2, `confluence-configs/settings.yaml`)
+
+- Buy readiness thresholds: 75 / 55 / 35 (unchanged)
 - Stacked zone: **+5** to `confluence_score`
-- Production server: **max 5 active tickers** watched at once (`max_active_tickers: 5`); batch scripts can still query more via one-shot `GetConfluence` / `confluence-test`
+- `min_upside_pct: 0.03` hard gate on buy readiness
+- ADR `spike_warning`: 30d < 3%, 5d ≥ 4%, ratio ≥ 1.4 → readiness capped at `caution`
+- Production server: **max 5 active tickers** (`max_active_tickers: 5`)
 
 ---
 

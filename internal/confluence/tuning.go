@@ -42,7 +42,7 @@ func (p *Processor) fetchRSI(ctx context.Context, ticker string) (float64, time.
 	if err := p.acquireRSISlot(ctx); err != nil {
 		return 0, time.Time{}, err
 	}
-	return p.client.GetRSI(ctx, ticker, 14)
+	return p.client.GetRSI(ctx, ticker, 14, "minute")
 }
 
 func (p *Processor) acquireRSISlot(ctx context.Context) error {

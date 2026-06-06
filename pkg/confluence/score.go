@@ -30,6 +30,20 @@ func BandForScore(score float64) ReadinessBand {
 	}
 }
 
+// CapReadiness limits readiness to at most the given ceiling band.
+func CapReadiness(band ReadinessBand, ceiling ReadinessBand) ReadinessBand {
+	order := map[ReadinessBand]int{
+		ReadinessNoTrade:        0,
+		ReadinessCaution:        1,
+		ReadinessPossibleEntry:  2,
+		ReadinessHighConviction: 3,
+	}
+	if order[band] > order[ceiling] {
+		return ceiling
+	}
+	return band
+}
+
 func bandIntensity(band ReadinessBand) int {
 	switch band {
 	case ReadinessHighConviction:

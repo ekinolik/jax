@@ -357,9 +357,9 @@ func (p *Processor) buildScoreInput(ctx context.Context, ticker string, now time
 		return pkgconfluence.ScoreInput{}, err
 	}
 
-	rsi, _, err := p.fetchRSI(ctx, ticker)
-	if err != nil {
-		return pkgconfluence.ScoreInput{}, fmt.Errorf("RSI: %w", err)
+	rsi, _, rsiErr := p.fetchRSI(ctx, ticker)
+	if rsiErr != nil {
+		log.Printf("[confluence] RSI minute %s: %v", ticker, rsiErr)
 	}
 
 	spySpot, _ := p.spotFor(ctx, "SPY")
@@ -383,24 +383,30 @@ func (p *Processor) buildScoreInput(ctx context.Context, ticker string, now time
 		return pkgconfluence.ScoreInput{}, err
 	}
 
-	return pkgconfluence.ScoreInput{
-		Ticker:       ticker,
-		Spot:         spot,
-		SpotTime:     spotTime,
-		Slices:       slices,
-		RSI:          rsi,
-		SPYOpen:      spyDay.Open,
-		SPYSpot:      spySpot,
-		QQQOpen:      qqqDay.Open,
-		QQQSpot:      qqqSpot,
-		TargetOpen:   targetDay.Open,
-		ETFSpot:      etfSpot,
-		ETFOpen:      etfDay.Open,
-		SectorETF:    sectorETF,
-		IntradayHigh: targetDay.High,
-		IntradayLow:  targetDay.Low,
-		Now:          now,
-	}, nil
+	in := pkgconfluence.ScoreInput{
+		Ticker:        ticker,
+		Spot:          spot,
+		SpotTime:      spotTime,
+		Slices:        slices,
+		RSI:           rsi,
+		SPYOpen:       spyDay.Open,
+		SPYSpot:       spySpot,
+		QQQOpen:       qqqDay.Open,
+		QQQSpot:       qqqSpot,
+		TargetOpen:    targetDay.Open,
+		ETFSpot:       etfSpot,
+		ETFOpen:       etfDay.Open,
+		SectorETF:     sectorETF,
+		IntradayHigh:  targetDay.High,
+		IntradayLow:   targetDay.Low,
+		SessionOpen:   targetDay.Open,
+		SessionVolume: targetDay.Volume,
+		SessionVWAP:   targetDay.VWAP,
+		Now:           now,
+		Settings:      p.settings,
+	}
+	p.EnrichScoreInput(ctx, ticker, &in, now)
+	return in, nil
 }
 
 func (p *Processor) spotFor(ctx context.Context, ticker string) (float64, error) {
@@ -783,6 +789,7 @@ func (p *Processor) isRTHNow() bool {
 }
 
 func (p *Processor) onRTHOpen() {
+	p.clearSessionCaches()
 	for _, ticker := range p.registry.ActiveTickers() {
 		p.startGreeksTimer(ticker)
 		p.triggerImmediateRecompute(ticker)

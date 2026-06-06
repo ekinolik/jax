@@ -8,20 +8,35 @@ import (
 	"github.com/massive-com/client-go/v2/rest/models"
 )
 
+const (
+	rsiMinValid = 1.0
+	rsiMaxValid = 99.0
+)
+
+// ValidRSI reports whether v is in the conventional RSI range (1–99).
+// Values outside this band usually indicate bad upstream indicator data
+// (e.g. synthetic flat minute bars) rather than a true extreme reading.
+func ValidRSI(v float64) bool {
+	return v >= rsiMinValid && v <= rsiMaxValid
+}
+
 // GetRSI fetches the latest RSI value without caching.
-// Uses minute timespan, limit=1, order=desc per confluence requirements.
-func (c *Client) GetRSI(ctx context.Context, ticker string, window int) (float64, time.Time, error) {
+// timespan should be "minute" or "day"; uses limit=1, order=desc.
+func (c *Client) GetRSI(ctx context.Context, ticker string, window int, timespan string) (float64, time.Time, error) {
 	if window <= 0 {
 		window = 14
+	}
+	if timespan == "" {
+		timespan = "minute"
 	}
 
 	limit := 1
 	order := models.Desc
-	timespan := models.Minute
+	ts := models.Timespan(timespan)
 	seriesType := models.Close
 	params := models.GetRSIParams{Ticker: ticker}.
 		WithWindow(window).
-		WithTimespan(timespan).
+		WithTimespan(ts).
 		WithSeriesType(seriesType).
 		WithLimit(limit).
 		WithOrder(order)
@@ -43,5 +58,8 @@ func (c *Client) GetRSI(ctx context.Context, ticker string, window int) (float64
 	}
 
 	latest := res.Results.Values[0]
+	if !ValidRSI(latest.Value) {
+		return 0, time.Time{}, fmt.Errorf("RSI out of range for %s (%s): %.2f", ticker, timespan, latest.Value)
+	}
 	return latest.Value, time.Time(latest.Timestamp), nil
 }

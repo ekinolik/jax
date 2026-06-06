@@ -34,6 +34,35 @@ type TuningConfig struct {
 	MaxRSICallsPerMinute   int `yaml:"max_rsi_calls_per_minute"`
 }
 
+// SignalWeights holds per-axis buy signal weights (should sum to 1.0).
+type SignalWeights struct {
+	GammaSupport      float64 `yaml:"gamma_support"`
+	DeltaSupport      float64 `yaml:"delta_support"`
+	RSIMinute         float64 `yaml:"rsi_minute"`
+	RSIDaily          float64 `yaml:"rsi_daily"`
+	Sector            float64 `yaml:"sector"`
+	Market            float64 `yaml:"market"`
+	Upside            float64 `yaml:"upside"`
+	Downside          float64 `yaml:"downside"`
+	ADR               float64 `yaml:"adr"`
+	GammaEnvironment  float64 `yaml:"gamma_environment"`
+	GammaDirectional  float64 `yaml:"gamma_directional"`
+	ShortSqueeze      float64 `yaml:"short_squeeze"`
+}
+
+// ScoringConfig holds v2 scoring thresholds and gates.
+type ScoringConfig struct {
+	MinUpsidePct            float64 `yaml:"min_upside_pct"`
+	UpsideGreatPct          float64 `yaml:"upside_great_pct"`
+	ADRSpikeRatioWarn       float64 `yaml:"adr_spike_ratio_warn"`
+	ADR5dSpikeFloorPct      float64 `yaml:"adr_5d_spike_floor_pct"`
+	ADR30dSpikeCeilingPct   float64 `yaml:"adr_30d_spike_ceiling_pct"`
+	MinRiskReward           float64 `yaml:"min_risk_reward"`
+	NeutralGammaBandPct     float64 `yaml:"neutral_gamma_band_pct"`
+	CompoundSqueezeBonus    float64 `yaml:"compound_squeeze_bonus"`
+	GammaDirectionalBuyCap  float64 `yaml:"gamma_directional_buy_cap"`
+}
+
 // Settings holds confluence engine configuration from settings.yaml.
 type Settings struct {
 	PrefetchWatchlist      []string         `yaml:"prefetch_watchlist"`
@@ -45,6 +74,8 @@ type Settings struct {
 	WeeklyExpiryWeight     float32          `yaml:"weekly_expiry_weight"`
 	APIRetry               APIRetryConfig   `yaml:"api_retry"`
 	Tuning                 TuningConfig     `yaml:"tuning"`
+	SignalWeights          SignalWeights    `yaml:"signal_weights"`
+	Scoring                ScoringConfig    `yaml:"scoring"`
 }
 
 // SICSectorMapping maps SIC codes or descriptions to sector ETFs.
@@ -132,6 +163,114 @@ func (s *Settings) applyDefaults() {
 	if s.Tuning.MaxRSICallsPerMinute == 0 {
 		s.Tuning.MaxRSICallsPerMinute = 12
 	}
+	s.SignalWeights.applyDefaults()
+	s.Scoring.applyDefaults()
+}
+
+func (w *SignalWeights) applyDefaults() {
+	defaults := DefaultSignalWeights()
+	if w.GammaSupport == 0 {
+		w.GammaSupport = defaults.GammaSupport
+	}
+	if w.DeltaSupport == 0 {
+		w.DeltaSupport = defaults.DeltaSupport
+	}
+	if w.RSIMinute == 0 {
+		w.RSIMinute = defaults.RSIMinute
+	}
+	if w.RSIDaily == 0 {
+		w.RSIDaily = defaults.RSIDaily
+	}
+	if w.Sector == 0 {
+		w.Sector = defaults.Sector
+	}
+	if w.Market == 0 {
+		w.Market = defaults.Market
+	}
+	if w.Upside == 0 {
+		w.Upside = defaults.Upside
+	}
+	if w.Downside == 0 {
+		w.Downside = defaults.Downside
+	}
+	if w.ADR == 0 {
+		w.ADR = defaults.ADR
+	}
+	if w.GammaEnvironment == 0 {
+		w.GammaEnvironment = defaults.GammaEnvironment
+	}
+	if w.GammaDirectional == 0 {
+		w.GammaDirectional = defaults.GammaDirectional
+	}
+	if w.ShortSqueeze == 0 {
+		w.ShortSqueeze = defaults.ShortSqueeze
+	}
+}
+
+func (c *ScoringConfig) applyDefaults() {
+	if c.MinUpsidePct == 0 {
+		c.MinUpsidePct = 0.03
+	}
+	if c.UpsideGreatPct == 0 {
+		c.UpsideGreatPct = 0.06
+	}
+	if c.ADRSpikeRatioWarn == 0 {
+		c.ADRSpikeRatioWarn = 1.4
+	}
+	if c.ADR5dSpikeFloorPct == 0 {
+		c.ADR5dSpikeFloorPct = 4.0
+	}
+	if c.ADR30dSpikeCeilingPct == 0 {
+		c.ADR30dSpikeCeilingPct = 3.0
+	}
+	if c.MinRiskReward == 0 {
+		c.MinRiskReward = 1.5
+	}
+	if c.NeutralGammaBandPct == 0 {
+		c.NeutralGammaBandPct = 0.003
+	}
+	if c.CompoundSqueezeBonus == 0 {
+		c.CompoundSqueezeBonus = 10
+	}
+	if c.GammaDirectionalBuyCap == 0 {
+		c.GammaDirectionalBuyCap = -8
+	}
+}
+
+// DefaultSignalWeights returns v2 buy signal weight defaults.
+func DefaultSignalWeights() SignalWeights {
+	return SignalWeights{
+		GammaSupport:     0.16,
+		DeltaSupport:     0.10,
+		RSIMinute:        0.12,
+		RSIDaily:         0.03,
+		Sector:           0.18,
+		Market:           0.08,
+		Upside:           0.07,
+		Downside:         0.03,
+		ADR:              0.05,
+		GammaEnvironment: 0.04,
+		GammaDirectional: 0.06,
+		ShortSqueeze:     0.08,
+	}
+}
+
+// DefaultScoringConfig returns v2 scoring threshold defaults.
+func DefaultScoringConfig() ScoringConfig {
+	cfg := ScoringConfig{}
+	cfg.applyDefaults()
+	return cfg
+}
+
+// EffectiveSettings returns settings or defaults when nil (tests / CLI).
+func EffectiveSettings(s *Settings) Settings {
+	if s == nil {
+		out := Settings{}
+		out.SignalWeights = DefaultSignalWeights()
+		out.Scoring = DefaultScoringConfig()
+		return out
+	}
+	return *s
 }
 
 var (

@@ -63,6 +63,28 @@ func TestSettingsIsRTH_holidayClosed(t *testing.T) {
 	assert.False(t, tradingDay)
 }
 
+func TestSettingsSignalWeights(t *testing.T) {
+	settings, err := confluence.LoadSettings("../../confluence-configs/settings.yaml")
+	require.NoError(t, err)
+
+	var sum float64
+	sum += settings.SignalWeights.GammaSupport
+	sum += settings.SignalWeights.DeltaSupport
+	sum += settings.SignalWeights.RSIMinute
+	sum += settings.SignalWeights.RSIDaily
+	sum += settings.SignalWeights.Sector
+	sum += settings.SignalWeights.Market
+	sum += settings.SignalWeights.Upside
+	sum += settings.SignalWeights.Downside
+	sum += settings.SignalWeights.ADR
+	sum += settings.SignalWeights.GammaEnvironment
+	sum += settings.SignalWeights.GammaDirectional
+	sum += settings.SignalWeights.ShortSqueeze
+	assert.InDelta(t, 1.0, sum, 0.01)
+	assert.Greater(t, settings.SignalWeights.Sector, settings.SignalWeights.Market)
+	assert.Equal(t, 0.03, settings.Scoring.MinUpsidePct)
+}
+
 func TestSettingsTuningDefaults(t *testing.T) {
 	settings, err := confluence.LoadSettings("../../confluence-configs/settings.yaml")
 	require.NoError(t, err)

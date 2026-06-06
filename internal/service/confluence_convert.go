@@ -11,6 +11,11 @@ func SnapshotToProto(snap *pkgconfluence.ConfluenceSnapshot) *confluencev1.Confl
 		return nil
 	}
 
+	buySigs := snap.BuySignals
+	if len(buySigs) == 0 {
+		buySigs = snap.Signals
+	}
+
 	out := &confluencev1.ConfluenceSnapshot{
 		Ticker:             snap.Ticker,
 		Timestamp:          snap.UpdatedAt.Unix(),
@@ -27,7 +32,41 @@ func SnapshotToProto(snap *pkgconfluence.ConfluenceSnapshot) *confluencev1.Confl
 		SectorEtf:          snap.SectorETF,
 		StackedZone:        snap.StackedZone,
 		Levels:             levelsToProto(snap.Levels),
-		Signals:            make([]*confluencev1.ConfluenceSignal, 0, len(snap.Signals)),
+		Signals:            signalsToProto(buySigs),
+		BuySignals:         signalsToProto(buySigs),
+		SellSignals:        signalsToProto(snap.SellSignals),
+		SellScore:          snap.SellScore,
+		SellReadiness:      string(snap.SellReadiness),
+		ExitAction:         string(snap.ExitAction),
+		DistanceToExit:     string(snap.DistanceToExit),
+		RsiDaily:           snap.RSIDaily,
+		AdrPct:             snap.ADRPct,
+		Adr_30DPct:         snap.ADR30dPct,
+		Adr_5DPct:          snap.ADR5dPct,
+		AdrSpikeRatio:      snap.ADRSpikeRatio,
+		AdrRegime:          string(snap.ADRRegime),
+		UpsidePct:          snap.UpsidePct,
+		DownsidePct:        snap.DownsidePct,
+		RiskReward:         snap.RiskReward,
+		UpsideBeyondResistancePct: snap.UpsideBeyondResistancePct,
+		GammaRegime:               string(snap.GammaRegime),
+		GammaRegimeStrength:       string(snap.GammaRegimeStrength),
+		NetGexAtSpot:              snap.NetGEXAtSpot,
+		CallWall:                  snap.CallWall,
+		PutWall:                   snap.PutWall,
+		SessionVwap:               snap.SessionVWAP,
+		RelativeVolume:            snap.RelativeVolume,
+		GammaSqueezeActive:        snap.GammaSqueezeActive,
+		ShortSqueezeActive:        snap.ShortSqueezeActive,
+		GammaEnvironmentScore:     snap.GammaEnvironmentScore,
+		GammaDirectionalScore:     snap.GammaDirectionalScore,
+		ShortSqueezeScore:         snap.ShortSqueezeScore,
+		ShortPressureScore:        snap.ShortPressureScore,
+		SqueezeTriggerScore:       snap.SqueezeTriggerScore,
+		ShortInterestPct:          snap.ShortInterestPct,
+		ShortVolumeRatio:          snap.ShortVolumeRatio,
+		DaysToCover:               snap.DaysToCover,
+		FloatShares:               snap.FloatShares,
 	}
 	if !snap.SpotTime.IsZero() {
 		out.SpotTimestamp = snap.SpotTime.Unix()
@@ -35,8 +74,13 @@ func SnapshotToProto(snap *pkgconfluence.ConfluenceSnapshot) *confluencev1.Confl
 	if !snap.DataAsOf.IsZero() {
 		out.DataAsOf = snap.DataAsOf.Unix()
 	}
-	for _, sig := range snap.Signals {
-		out.Signals = append(out.Signals, signalToProto(sig))
+	return out
+}
+
+func signalsToProto(sigs []pkgconfluence.Signal) []*confluencev1.ConfluenceSignal {
+	out := make([]*confluencev1.ConfluenceSignal, 0, len(sigs))
+	for _, sig := range sigs {
+		out = append(out, signalToProto(sig))
 	}
 	return out
 }

@@ -13,11 +13,13 @@ import (
 
 const defaultStrikeBand = 0.15
 
-// DayStats holds session open/high/low for a symbol.
+// DayStats holds session open/high/low/volume/VWAP for a symbol.
 type DayStats struct {
-	Open float64
-	High float64
-	Low  float64
+	Open   float64
+	High   float64
+	Low    float64
+	Volume float64
+	VWAP   float64
 }
 
 // StrikeBand returns the default ±15% strike window around spot.
@@ -193,6 +195,39 @@ func FetchDayStats(ctx context.Context, client *polygon.Client, settings *pkgcon
 	return dailyFallbackStats(ctx, client, ticker, localNow)
 }
 
+const dailyBarsLookback = 30
+
+// FetchDailyBars returns up to 30 daily OHLCV bars ending at now (shared ADR + breakout cache).
+func FetchDailyBars(ctx context.Context, client *polygon.Client, settings *pkgconfluence.Settings, ticker string, now time.Time) ([]pkgconfluence.DailyBar, error) {
+	loc, err := time.LoadLocation(settings.MarketHours.Timezone)
+	if err != nil {
+		return nil, fmt.Errorf("load market timezone: %w", err)
+	}
+	localNow := now.In(loc)
+	from := localNow.AddDate(0, 0, -(dailyBarsLookback + 10))
+	aggs, err := client.GetAggregates(ctx, ticker, 1, "day", from.UnixMilli(), localNow.UnixMilli(), true)
+	if err != nil {
+		return nil, err
+	}
+	if len(aggs) == 0 {
+		return nil, fmt.Errorf("no daily bars for %s", ticker)
+	}
+	start := 0
+	if len(aggs) > dailyBarsLookback {
+		start = len(aggs) - dailyBarsLookback
+	}
+	bars := make([]pkgconfluence.DailyBar, 0, len(aggs)-start)
+	for _, bar := range aggs[start:] {
+		bars = append(bars, pkgconfluence.DailyBar{
+			High:   bar.High,
+			Low:    bar.Low,
+			Close:  bar.Close,
+			Volume: float64(bar.Volume),
+		})
+	}
+	return bars, nil
+}
+
 func minuteDayStats(ctx context.Context, client *polygon.Client, ticker string, from, to time.Time) (DayStats, bool, error) {
 	if !to.After(from) {
 		return DayStats{}, false, nil
@@ -211,13 +246,24 @@ func minuteDayStats(ctx context.Context, client *polygon.Client, ticker string, 
 		High: aggs[0].High,
 		Low:  aggs[0].Low,
 	}
-	for _, bar := range aggs[1:] {
+	var volSum, vwapNum float64
+	for _, bar := range aggs {
 		if bar.High > stats.High {
 			stats.High = bar.High
 		}
 		if bar.Low < stats.Low {
 			stats.Low = bar.Low
 		}
+		vol := float64(bar.Volume)
+		stats.Volume += vol
+		if vol > 0 {
+			typical := (bar.High + bar.Low + bar.Close) / 3
+			vwapNum += typical * vol
+			volSum += vol
+		}
+	}
+	if volSum > 0 {
+		stats.VWAP = vwapNum / volSum
 	}
 	return stats, true, nil
 }

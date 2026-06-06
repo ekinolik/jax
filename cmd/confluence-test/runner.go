@@ -19,7 +19,7 @@ type runnerDeps struct {
 	loadSICSectors  func(string) (*pkgconfluence.SICSectors, error)
 	newPolygon      func(*config.Config) *polygon.Client
 	newOICache      func(string) (*intconfluence.OICache, error)
-	newProcessor    func(*pkgconfluence.Settings, *pkgconfluence.SICSectors, *intconfluence.OICache) *intconfluence.Processor
+	newProcessor    func(*pkgconfluence.Settings, *pkgconfluence.SICSectors, *intconfluence.OICache, *polygon.Client) *intconfluence.Processor
 }
 
 func defaultDeps() runnerDeps {
@@ -29,9 +29,9 @@ func defaultDeps() runnerDeps {
 		loadSICSectors: pkgconfluence.LoadSICSectors,
 		newPolygon:     polygon.NewClient,
 		newOICache:     intconfluence.NewOICache,
-		newProcessor: func(settings *pkgconfluence.Settings, sectors *pkgconfluence.SICSectors, oiCache *intconfluence.OICache) *intconfluence.Processor {
+		newProcessor: func(settings *pkgconfluence.Settings, sectors *pkgconfluence.SICSectors, oiCache *intconfluence.OICache, client *polygon.Client) *intconfluence.Processor {
 			registry := intconfluence.NewRegistry(settings.MaxActiveTickers)
-			return intconfluence.NewProcessor(settings, sectors, registry, oiCache, nil, nil)
+			return intconfluence.NewProcessor(settings, sectors, registry, oiCache, client, nil)
 		},
 	}
 }
@@ -74,7 +74,7 @@ func runWithDeps(ctx context.Context, opts cliOptions, progress io.Writer, deps 
 	if err != nil {
 		return nil, fmt.Errorf("init OI cache: %w", err)
 	}
-	processor := deps.newProcessor(settings, sectors, oiCache)
+	processor := deps.newProcessor(settings, sectors, oiCache, client)
 
 	now := time.Now().UTC()
 	marketDate, err := intconfluence.MarketCalendarDate(settings, now)
@@ -115,9 +115,9 @@ func runWithDeps(ctx context.Context, opts cliOptions, progress io.Writer, deps 
 	}
 
 	logf("fetching RSI for %s...", ticker)
-	rsi, _, err := client.GetRSI(ctx, ticker, 14)
-	if err != nil {
-		return nil, fmt.Errorf("RSI for %s: %w", ticker, err)
+	rsi, _, rsiErr := client.GetRSI(ctx, ticker, 14, "minute")
+	if rsiErr != nil {
+		logf("RSI minute %s: %v (continuing with unavailable)", ticker, rsiErr)
 	}
 
 	logf("fetching ticker overview for %s...", ticker)
@@ -161,23 +161,29 @@ func runWithDeps(ctx context.Context, opts cliOptions, progress io.Writer, deps 
 	}
 
 	scoreInput := pkgconfluence.ScoreInput{
-		Ticker:       ticker,
-		Spot:         spot,
-		SpotTime:     spotTime,
-		Slices:       slices,
-		RSI:          rsi,
-		SPYOpen:      spyDay.Open,
-		SPYSpot:      spySpot,
-		QQQOpen:      qqqDay.Open,
-		QQQSpot:      qqqSpot,
-		TargetOpen:   targetDay.Open,
-		ETFOpen:      etfDay.Open,
-		ETFSpot:      etfSpot,
-		SectorETF:    sectorETF,
-		IntradayHigh: targetDay.High,
-		IntradayLow:  targetDay.Low,
-		Now:          now,
+		Ticker:        ticker,
+		Spot:          spot,
+		SpotTime:      spotTime,
+		Slices:        slices,
+		RSI:           rsi,
+		SPYOpen:       spyDay.Open,
+		SPYSpot:       spySpot,
+		QQQOpen:       qqqDay.Open,
+		QQQSpot:       qqqSpot,
+		TargetOpen:    targetDay.Open,
+		ETFOpen:       etfDay.Open,
+		ETFSpot:       etfSpot,
+		SectorETF:     sectorETF,
+		IntradayHigh:  targetDay.High,
+		IntradayLow:   targetDay.Low,
+		SessionOpen:   targetDay.Open,
+		SessionVolume: targetDay.Volume,
+		SessionVWAP:   targetDay.VWAP,
+		Now:           now,
+		Settings:      settings,
 	}
+
+	processor.EnrichScoreInput(ctx, ticker, &scoreInput, now)
 
 	logf("computing confluence snapshot...")
 	snap, err := processor.RecomputeSnapshot(ticker, scoreInput, now)

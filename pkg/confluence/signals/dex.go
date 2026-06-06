@@ -16,14 +16,18 @@ const (
 type DeltaInput struct {
 	Spot   float64
 	Levels confluence.Levels
+	Weight float64
 }
 
 // ComputeDeltaSupport scores proximity to rank-1 DEX support below spot.
 func ComputeDeltaSupport(in DeltaInput) confluence.Signal {
 	signal := confluence.Signal{
 		Name:   "delta_support",
-		Weight: 0.15,
+		Weight: in.Weight,
 		Icon:   confluence.IconDelta,
+	}
+	if signal.Weight == 0 {
+		signal.Weight = 0.10
 	}
 
 	support, ok := Rank1DEXSupport(in.Levels)

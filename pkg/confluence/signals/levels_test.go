@@ -76,6 +76,53 @@ func TestHasStackedZone(t *testing.T) {
 	assert.False(t, signals.HasStackedZone(levels, spot))
 }
 
+func TestRank1Resistance_andSecondSupport(t *testing.T) {
+	levels := confluence.Levels{
+		Support: []confluence.Level{
+			{Price: 98, Rank: 1, Strength: 0.9},
+			{Price: 96, Rank: 2, Strength: 0.7},
+		},
+		Resistance: []confluence.Level{
+			{Price: 104, Rank: 1, Strength: 0.85},
+			{Price: 108, Rank: 2, Strength: 0.6},
+		},
+	}
+	r1, ok := signals.Rank1Resistance(levels)
+	require.True(t, ok)
+	assert.Equal(t, 104.0, r1.Price)
+	s2, ok := signals.SecondSupport(levels)
+	require.True(t, ok)
+	assert.Equal(t, 96.0, s2.Price)
+}
+
+func TestTradeGeometry_upsideDownside(t *testing.T) {
+	spot := 100.0
+	levels := confluence.Levels{
+		Support: []confluence.Level{
+			{Price: 98, Rank: 1},
+			{Price: 96, Rank: 2},
+		},
+		Resistance: []confluence.Level{{Price: 106, Rank: 1}},
+	}
+	geo := signals.TradeGeometry(spot, levels)
+	assert.True(t, geo.HasUpside)
+	assert.InDelta(t, 0.06, geo.UpsidePct, 0.001)
+	assert.True(t, geo.HasDownside)
+	assert.Greater(t, geo.RiskReward, 1.0)
+}
+
+func TestRank1GEXResistance(t *testing.T) {
+	levels := confluence.Levels{
+		Resistance: []confluence.Level{
+			{Price: 105, Source: confluence.LevelSourceDEX, Rank: 1},
+			{Price: 108, Source: confluence.LevelSourceGEX, Rank: 2},
+		},
+	}
+	gex, ok := signals.Rank1GEXResistance(levels)
+	require.True(t, ok)
+	assert.Equal(t, 108.0, gex.Price)
+}
+
 func TestStrikeGEX_matchesOptionServiceConvention(t *testing.T) {
 	spot := 120.0
 	sp := confluence.StrikeProfile{

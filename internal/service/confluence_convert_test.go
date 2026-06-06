@@ -109,8 +109,40 @@ func TestSnapshotToProto_roundTripKeyFields(t *testing.T) {
 	if len(proto.Signals) != 2 {
 		t.Fatalf("signals len: got %d want 2", len(proto.Signals))
 	}
+	if len(proto.BuySignals) != 2 {
+		t.Fatalf("buy_signals len: got %d want 2", len(proto.BuySignals))
+	}
 	if proto.Signals[0].Icon != "G" || proto.Signals[1].Icon != "R" {
 		t.Errorf("signal icons: %q %q", proto.Signals[0].Icon, proto.Signals[1].Icon)
+	}
+}
+
+func TestSnapshotToProto_v2Fields(t *testing.T) {
+	snap := &pkgconfluence.ConfluenceSnapshot{
+		Ticker:        "GME",
+		Score:         65,
+		ReadinessBand: pkgconfluence.ReadinessPossibleEntry,
+		ADR30dPct:     4.5,
+		ADRRegime:     pkgconfluence.ADRStableHigh,
+		UpsidePct:     0.05,
+		GammaRegime:   pkgconfluence.GammaNegative,
+		SellScore:     55,
+		SellReadiness: pkgconfluence.SellConsiderTrim,
+		ExitAction:    pkgconfluence.ExitTrim,
+		DistanceToExit: pkgconfluence.ExitIdeal,
+		RSIDaily:      45,
+		BuySignals:    []pkgconfluence.Signal{{Name: "upside", Weight: 0.07}},
+		SellSignals:   []pkgconfluence.Signal{{Name: "resistance_proximity", Weight: 0.30}},
+	}
+	proto := SnapshotToProto(snap)
+	if proto.Adr_30DPct != 4.5 {
+		t.Errorf("adr_30d: got %v", proto.Adr_30DPct)
+	}
+	if proto.SellScore != 55 || proto.ExitAction != "trim" {
+		t.Errorf("sell: score=%v action=%q", proto.SellScore, proto.ExitAction)
+	}
+	if len(proto.SellSignals) != 1 {
+		t.Errorf("sell_signals len: %d", len(proto.SellSignals))
 	}
 }
 

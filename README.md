@@ -13,14 +13,14 @@ Phase 0 adds the data layer; **Phase 1** adds multi-level GEX/DEX support/resist
 | Component | Location | Purpose |
 |-----------|----------|---------|
 | Types & expiration logic | `pkg/confluence/` | `StrikeProfile`, `OptionSlice`, `ConfluenceSnapshot`, `ScoreInput` |
-| Signal calculators | `pkg/confluence/signals/` | GEX/DEX levels, gamma/delta/RSI/market/sector/range/entry signals |
+| Signal calculators | `pkg/confluence/signals/` | GEX/DEX levels, v2 buy signals (geometry, ADR, gamma regime, squeeze), sell path |
 | Composite scoring | `pkg/confluence/score.go` | Weighted 0–100 score, readiness bands, haptic/background levels |
 | Snapshot builder | `pkg/confluence/signals/score.go` | `BuildSnapshot` — assembles full `ConfluenceSnapshot` |
 | Massive REST extensions | `internal/polygon/` | `GetRSI`, `GetTickerOverview`, `GetOptionSlice`, expiration resolver |
 | Stream hub | `internal/stream/` | Real-time stock trade WebSocket (`T.*`) spot state |
 | Processor | `internal/confluence/` | Event loop, registry, OI cache, RTH gate, `Watch`/`GetSnapshot`, `RecomputeSnapshot` |
 | Fetch helpers | `internal/confluence/fetch.go` | Shared OI/greeks/day-stats fetch logic (server + CLI) |
-| Config | `confluence-configs/` | Prefetch watchlist, dual-expiration tickers, SIC→ETF map |
+| Config | `confluence-configs/` | Prefetch watchlist, `signal_weights`, `scoring` thresholds, SIC→ETF map |
 
 **Environment**
 

@@ -82,12 +82,106 @@ const (
 type SignalIcon string
 
 const (
-	IconGamma  SignalIcon = "G"
-	IconDelta  SignalIcon = "D"
-	IconRSI    SignalIcon = "R"
-	IconSector SignalIcon = "S"
-	IconMarket SignalIcon = "M"
+	IconGamma      SignalIcon = "G"
+	IconDelta      SignalIcon = "D"
+	IconRSI        SignalIcon = "R"
+	IconSector     SignalIcon = "S"
+	IconMarket     SignalIcon = "M"
+	IconUpside     SignalIcon = "U"
+	IconDownside   SignalIcon = "u"
+	IconADR        SignalIcon = "A"
+	IconGammaEnv   SignalIcon = "g"
+	IconGammaDir   SignalIcon = ">"
+	IconSqueeze    SignalIcon = "Q"
+	IconSell       SignalIcon = "X"
 )
+
+// ADRRegime classifies dual-window ADR suitability.
+type ADRRegime string
+
+const (
+	ADRStableHigh   ADRRegime = "stable_high"
+	ADRWorkable     ADRRegime = "workable"
+	ADRStableLow    ADRRegime = "stable_low"
+	ADRSpikeWarning ADRRegime = "spike_warning"
+	ADRSpikeFade    ADRRegime = "spike_fade"
+	ADRContracting  ADRRegime = "contracting"
+)
+
+// GammaRegime classifies dealer gamma positioning at spot.
+type GammaRegime string
+
+const (
+	GammaPositive GammaRegime = "positive"
+	GammaNegative GammaRegime = "negative"
+	GammaNeutral  GammaRegime = "neutral"
+)
+
+// GammaStrength classifies normalized net GEX magnitude.
+type GammaStrength string
+
+const (
+	GammaMild     GammaStrength = "mild"
+	GammaModerate GammaStrength = "moderate"
+	GammaExtreme  GammaStrength = "extreme"
+)
+
+// SellReadinessBand maps sell score to exit urgency tiers.
+type SellReadinessBand string
+
+const (
+	SellHold         SellReadinessBand = "hold"
+	SellWatch        SellReadinessBand = "watch"
+	SellConsiderTrim SellReadinessBand = "consider_trim"
+	SellTakeProfit   SellReadinessBand = "take_profit"
+)
+
+// ExitAction recommends trim vs full exit for longs.
+type ExitAction string
+
+const (
+	ExitHold    ExitAction = "hold"
+	ExitTrim    ExitAction = "trim"
+	ExitSellAll ExitAction = "sell_all"
+)
+
+// ExitTiming describes spot position relative to rank-1 resistance.
+type ExitTiming string
+
+const (
+	ExitEarly ExitTiming = "early"
+	ExitIdeal ExitTiming = "ideal"
+	ExitLate  ExitTiming = "late"
+)
+
+// DailyBar is one session OHLCV bar for ADR and breakout logic.
+type DailyBar struct {
+	High   float64
+	Low    float64
+	Close  float64
+	Volume float64
+}
+
+// ADRMetrics holds dual-window ADR computation output.
+type ADRMetrics struct {
+	ADR30dPct   float64
+	ADR5dPct    float64
+	SpikeRatio  float64
+	Regime      ADRRegime
+	HasData     bool
+}
+
+// TradeGeometry holds upside/downside room from level ladder.
+type TradeGeometry struct {
+	UpsidePct     float64
+	DownsidePct   float64
+	RiskReward    float64
+	UpsideTarget  float64
+	StopSupport   float64
+	HasUpside     bool
+	HasDownside   bool
+	StopEstimated bool
+}
 
 // Signal is one weighted axis in the confluence radar.
 type Signal struct {
@@ -128,6 +222,7 @@ type ScoreInput struct {
 	OIStatus     OIStatus
 	MarketStatus MarketStatus
 	RSI          float64
+	RSIDaily     float64
 
 	SPYOpen float64
 	SPYSpot float64
@@ -141,6 +236,23 @@ type ScoreInput struct {
 
 	IntradayHigh float64
 	IntradayLow  float64
+	SessionOpen  float64
+	SessionVolume float64
+	SessionVWAP  float64
+	RelativeVolume float64
+
+	ADR ADRMetrics
+
+	ShortInterestPct float64
+	ShortVolumeRatio float64
+	DaysToCover      float64
+	FloatShares      float64
+
+	New20DayHigh  bool
+	New52WeekHigh bool
+	GapUpPct      float64
+
+	Settings *Settings
 
 	Now time.Time
 
@@ -162,6 +274,8 @@ type ConfluenceSnapshot struct {
 
 	Levels          Levels
 	Signals         []Signal
+	BuySignals      []Signal
+	SellSignals     []Signal
 	Score           float64
 	ReadinessBand   ReadinessBand
 	BackgroundLevel int
@@ -171,4 +285,44 @@ type ConfluenceSnapshot struct {
 	RangePosition   float64
 	DistanceToEntry EntryTiming
 	RSI             float64
+	RSIDaily        float64
+
+	// Trade geometry
+	UpsidePct   float64
+	DownsidePct float64
+	RiskReward  float64
+
+	// ADR dual-window
+	ADRPct       float64
+	ADR30dPct    float64
+	ADR5dPct     float64
+	ADRSpikeRatio float64
+	ADRRegime    ADRRegime
+
+	// Gamma regime + squeeze
+	GammaRegime            GammaRegime
+	GammaRegimeStrength    GammaStrength
+	NetGEXAtSpot           float64
+	CallWall               float64
+	PutWall                float64
+	SessionVWAP            float64
+	RelativeVolume         float64
+	GammaSqueezeActive     bool
+	ShortSqueezeActive     bool
+	GammaEnvironmentScore  float64
+	GammaDirectionalScore  float64
+	ShortSqueezeScore      float64
+	ShortPressureScore     float64
+	SqueezeTriggerScore    float64
+	ShortInterestPct       float64
+	ShortVolumeRatio       float64
+	DaysToCover            float64
+	FloatShares            float64
+
+	// Sell path (long exits only)
+	SellScore                  float64
+	SellReadiness              SellReadinessBand
+	ExitAction                 ExitAction
+	DistanceToExit             ExitTiming
+	UpsideBeyondResistancePct  float64
 }
