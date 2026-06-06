@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/ekinolik/jax/internal/config"
-	polygon "github.com/polygon-io/client-go/rest"
-	"github.com/polygon-io/client-go/rest/iter"
-	"github.com/polygon-io/client-go/rest/models"
+	massive "github.com/massive-com/client-go/v2/rest"
+	"github.com/massive-com/client-go/v2/rest/iter"
+	"github.com/massive-com/client-go/v2/rest/models"
 )
 
 type Chain map[string]map[models.Date]map[string]models.OptionContractSnapshot
@@ -21,12 +21,12 @@ type PolygonAPI interface {
 }
 
 type Client struct {
-	client *polygon.Client
+	client *massive.Client
 }
 
 func NewClient(cfg *config.Config) *Client {
 	return &Client{
-		client: polygon.New(cfg.PolygonAPIKey),
+		client: massive.New(cfg.PolygonAPIKey),
 	}
 }
 

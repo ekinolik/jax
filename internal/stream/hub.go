@@ -1,0 +1,189 @@
+package stream
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"math"
+	"sync"
+	"time"
+
+	pkgconfluence "github.com/ekinolik/jax/pkg/confluence"
+	massivews "github.com/massive-com/client-go/v2/websocket"
+	wsmodels "github.com/massive-com/client-go/v2/websocket/models"
+)
+
+// SpotTick is the latest trade price for a symbol.
+type SpotTick struct {
+	Price     float64
+	Timestamp time.Time
+}
+
+// Hub maintains real-time spot state from Massive stock trade WebSocket (T.*).
+type Hub struct {
+	client *massivews.Client
+
+	mu      sync.RWMutex
+	spots   map[string]SpotTick
+	subs    map[string]int
+	started bool
+
+	runCtx    context.Context
+	runCancel context.CancelFunc
+	runWg     sync.WaitGroup
+}
+
+// NewHub creates a stream hub configured for Massive RealTime stock trades.
+func NewHub(apiKey string) (*Hub, error) {
+	client, err := massivews.New(massivews.Config{
+		APIKey: apiKey,
+		Feed:   massivews.RealTime,
+		Market: massivews.Stocks,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create stream hub client: %w", err)
+	}
+
+	return &Hub{
+		client: client,
+		spots:  make(map[string]SpotTick),
+		subs:   make(map[string]int),
+	}, nil
+}
+
+// Start connects to Massive and begins processing trade messages.
+func (h *Hub) Start(ctx context.Context) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.started {
+		return nil
+	}
+
+	if err := h.client.Connect(); err != nil {
+		return fmt.Errorf("connect stream hub: %w", err)
+	}
+
+	h.runCtx, h.runCancel = context.WithCancel(ctx)
+	h.started = true
+	h.runWg.Add(1)
+	go func() {
+		defer h.runWg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[stream] hub panic: %v", r)
+			}
+		}()
+		if err := h.run(h.runCtx); err != nil && h.runCtx.Err() == nil {
+			log.Printf("[stream] hub stopped: %v", err)
+		}
+	}()
+	return nil
+}
+
+// Stop closes the WebSocket connection and waits for the run loop to exit.
+func (h *Hub) Stop() {
+	h.mu.Lock()
+	if !h.started {
+		h.mu.Unlock()
+		return
+	}
+	cancel := h.runCancel
+	h.started = false
+	h.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	h.client.Close()
+	h.runWg.Wait()
+}
+
+// Subscribe registers interest in a ticker and subscribes to T.{ticker} when first referenced.
+func (h *Hub) Subscribe(ticker string) error {
+	ticker = pkgconfluence.NormalizeTicker(ticker)
+	if err := pkgconfluence.ValidateTicker(ticker); err != nil {
+		return err
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if count, ok := h.subs[ticker]; ok && count > 0 {
+		h.subs[ticker] = count + 1
+		return nil
+	}
+
+	if err := h.client.Subscribe(massivews.StocksTrades, ticker); err != nil {
+		return fmt.Errorf("subscribe trades for %s: %w", ticker, err)
+	}
+	h.subs[ticker] = 1
+	return nil
+}
+
+// Unsubscribe drops interest in a ticker and unsubscribes when ref-count reaches zero.
+func (h *Hub) Unsubscribe(ticker string) error {
+	ticker = pkgconfluence.NormalizeTicker(ticker)
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	count, ok := h.subs[ticker]
+	if !ok || count == 0 {
+		return nil
+	}
+	if count > 1 {
+		h.subs[ticker] = count - 1
+		return nil
+	}
+
+	if err := h.client.Unsubscribe(massivews.StocksTrades, ticker); err != nil {
+		return fmt.Errorf("unsubscribe trades for %s: %w", ticker, err)
+	}
+	delete(h.subs, ticker)
+	delete(h.spots, ticker)
+	return nil
+}
+
+// GetSpot returns the latest spot tick for a ticker, if available.
+func (h *Hub) GetSpot(ticker string) (SpotTick, bool) {
+	ticker = pkgconfluence.NormalizeTicker(ticker)
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	tick, ok := h.spots[ticker]
+	return tick, ok
+}
+
+func (h *Hub) run(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-h.client.Error():
+			if err != nil {
+				return fmt.Errorf("websocket error: %w", err)
+			}
+		case out, ok := <-h.client.Output():
+			if !ok {
+				return fmt.Errorf("websocket output closed")
+			}
+			h.handleMessage(out)
+		}
+	}
+}
+
+func (h *Hub) handleMessage(msg any) {
+	trade, ok := msg.(wsmodels.EquityTrade)
+	if !ok {
+		return
+	}
+	if trade.Symbol == "" || trade.Price <= 0 || math.IsNaN(trade.Price) || math.IsInf(trade.Price, 0) {
+		return
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.spots[trade.Symbol] = SpotTick{
+		Price:     trade.Price,
+		Timestamp: time.UnixMilli(trade.Timestamp).UTC(),
+	}
+}

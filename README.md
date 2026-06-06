@@ -1,6 +1,38 @@
 # JAX - Options Delta and Gamma Exposure Service
 
-JAX is a gRPC service that calculates delta exposure (DEX) and gamma exposure (GEX) for options using data from Polygon.io.
+JAX is a gRPC service that calculates delta exposure (DEX) and gamma exposure (GEX) for options using data from [Massive.com](https://massive.com) (formerly Polygon.io). JAX also includes foundational components for a real-time **Confluence Data API** (multi-signal day-trading scores).
+
+## Data Provider
+
+JAX uses the official [`github.com/massive-com/client-go/v2`](https://github.com/massive-com/client-go) client for REST and WebSocket access. Set `POLYGON_API_KEY` with your Massive.com API key (the environment variable name is unchanged for backward compatibility).
+
+## Confluence Data API (Phase 0 foundation)
+
+Phase 0 adds the core data layer for confluence scoring without exposing gRPC yet:
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| Types & expiration logic | `pkg/confluence/` | `StrikeProfile`, `OptionSlice`, `ConfluenceSnapshot`, monthly OPEX classifier |
+| Massive REST extensions | `internal/polygon/` | `GetRSI`, `GetTickerOverview`, `GetOptionSlice`, expiration resolver |
+| Stream hub | `internal/stream/` | Real-time stock trade WebSocket (`T.*`) spot state |
+| Processor skeleton | `internal/confluence/` | Active ticker registry, same-day OI disk cache, RTH gate |
+| Config | `confluence-configs/` | Prefetch watchlist, dual-expiration tickers, SIC→ETF map |
+
+**Environment**
+
+```bash
+export POLYGON_API_KEY=your_massive_api_key
+export CONFLUENCE_CACHE_DIR=./cache/confluence   # same-day OI cache (default)
+```
+
+**Design notes (Phase 0)**
+
+- RSI is fetched fresh on every recompute path — never cached
+- Open interest is cached on disk for the current trading day only (`oi/{TICKER}_{DATE}_{EXPIRATION}.json`)
+- Confluence processing runs during regular trading hours (9:30–16:00 ET, configurable in `confluence-configs/settings.yaml`)
+- SPY uses dual expiration (soonest + soonest weekly Friday) for OI levels
+
+Later phases add the scoring engine, gRPC `ConfluenceService`, and jax-ov WebSocket gateway.
 
 ## Available Methods
 

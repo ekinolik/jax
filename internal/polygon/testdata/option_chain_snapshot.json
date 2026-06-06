@@ -1,0 +1,41 @@
+[
+  {
+    "details": {
+      "contract_type": "call",
+      "expiration_date": "2024-03-15",
+      "strike_price": 500,
+      "ticker": "O:SPY240315C00500000"
+    },
+    "greeks": {
+      "delta": 0.55,
+      "gamma": 0.02
+    },
+    "open_interest": 1200
+  },
+  {
+    "details": {
+      "contract_type": "put",
+      "expiration_date": "2024-03-15",
+      "strike_price": 500,
+      "ticker": "O:SPY240315P00500000"
+    },
+    "greeks": {
+      "delta": -0.45,
+      "gamma": 0.018
+    },
+    "open_interest": 980
+  },
+  {
+    "details": {
+      "contract_type": "call",
+      "expiration_date": "2024-03-15",
+      "strike_price": 505,
+      "ticker": "O:SPY240315C00505000"
+    },
+    "greeks": {
+      "delta": 0.48,
+      "gamma": 0.021
+    },
+    "open_interest": 640
+  }
+]

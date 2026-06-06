@@ -1,0 +1,27 @@
+# OI pre-fetched daily at 08:00 ET (before RTH)
+prefetch_watchlist:
+  - SPY
+  - QQQ
+  - SMH
+  - IGV
+  - IWM
+  - HACK
+  - MEME
+  - XLE
+  - XLI
+
+# SPY: fetch OI for two expirations (soonest + soonest weekly Friday)
+dual_expiration_tickers:
+  - SPY
+
+max_active_tickers: 5
+oi_prefetch_time: "08:00"
+
+# Regular trading hours only
+market_hours:
+  timezone: America/New_York
+  open: "09:30"
+  close: "16:00"
+
+monthly_expiry_weight: 1.0
+weekly_expiry_weight: 0.65
