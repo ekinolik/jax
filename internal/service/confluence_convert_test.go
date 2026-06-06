@@ -10,6 +10,7 @@ import (
 func TestSnapshotToProto_roundTripKeyFields(t *testing.T) {
 	updatedAt := time.Date(2026, 6, 6, 14, 30, 0, 0, time.UTC)
 	spotTime := updatedAt.Add(-2 * time.Second)
+	dataAsOf := updatedAt.Add(-5 * time.Minute)
 
 	snap := &pkgconfluence.ConfluenceSnapshot{
 		Ticker:          "NVDA",
@@ -18,6 +19,7 @@ func TestSnapshotToProto_roundTripKeyFields(t *testing.T) {
 		OIStatus:        pkgconfluence.OIStatusReady,
 		MarketStatus:    pkgconfluence.MarketStatusOpen,
 		UpdatedAt:       updatedAt,
+		DataAsOf:        dataAsOf,
 		Score:           72.5,
 		ReadinessBand:   pkgconfluence.ReadinessPossibleEntry,
 		BackgroundLevel: 2,
@@ -80,6 +82,9 @@ func TestSnapshotToProto_roundTripKeyFields(t *testing.T) {
 	}
 	if proto.Spot != 120.5 || proto.SpotTimestamp != spotTime.Unix() {
 		t.Errorf("spot: got %v @ %d", proto.Spot, proto.SpotTimestamp)
+	}
+	if proto.DataAsOf != dataAsOf.Unix() {
+		t.Errorf("data_as_of: got %d want %d", proto.DataAsOf, dataAsOf.Unix())
 	}
 	if proto.Rsi != 31.2 || proto.SectorEtf != "SMH" || !proto.StackedZone {
 		t.Errorf("rsi/sector/stacked: got rsi=%v sector=%q stacked=%v", proto.Rsi, proto.SectorEtf, proto.StackedZone)

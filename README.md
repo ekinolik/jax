@@ -78,6 +78,7 @@ When `OIStatus` is `loading`, GEX/DEX signals are suppressed; RSI, market, secto
 - RSI is fetched fresh on every recompute — never cached
 - Open interest is cached on disk for the current trading day only (`oi/{TICKER}_{DATE}_{EXPIRATION}.json`)
 - Confluence processing runs during regular trading hours (9:30–16:00 ET, configurable in `confluence-configs/settings.yaml`)
+- **Closed-market bootstrap** — on cold start or first `GetConfluence`/`WatchConfluence` with no scored cache, the server performs a blocking one-shot Massive fetch (same path as `confluence-test`), even outside RTH; stale last-session spot/OI/greeks are acceptable. Response includes `market_status: "closed"`, `oi_status: "ready"`, populated `levels`, and `data_as_of` (Unix seconds for the latest input timestamp).
 - SPY uses dual expiration (soonest + soonest weekly Friday) for OI levels
 
 ### CLI test tool
@@ -112,7 +113,7 @@ Progress messages go to stderr; the full `ConfluenceSnapshot` JSON goes to stdou
 
 - **Stream hub** — Massive stock trades WebSocket (`T.*`) for active watches plus SPY/QQQ/sector ETF benchmarks
 - **Processor loop** — spot ticks debounce full recompute (≤5s); greeks refresh every 60–90s (max 5 min) and on spot move >0.5%
-- **RTH only** — processing during 9:30–16:00 ET weekdays (`settings.yaml`); pre-market subscriptions get `market_status: closed` until open
+- **RTH live loop** — event-driven recompute during 9:30–16:00 ET weekdays (`settings.yaml`); outside RTH the stream hub loop is idle but on-demand bootstrap fetches still run
 - **OI lifecycle** — lazy fetch on first `Watch` per day; 08:00 ET prefetch for `prefetch_watchlist`; same-day disk cache reused on restart
 - **Active ticker registry** — ref-counted `Watch` API; max 5 active tickers; 5 min idle grace after last unsubscribe
 - **Snapshot cache** — latest `ConfluenceSnapshot` per ticker in memory; push to `Watch` channels when score/signal status changes (30s duplicate debounce)
@@ -143,10 +144,10 @@ Proto: `api/proto/confluence/v1/confluence.proto`
 
 | RPC | Description |
 |-----|-------------|
-| `GetConfluence` | Returns latest snapshot; activates ticker and waits up to 30s if no cached snapshot |
-| `WatchConfluence` | Server-streaming updates when score or signal status changes (processor debounces duplicates) |
+| `GetConfluence` | Returns latest scored snapshot; bootstraps from Massive (up to 90s) when cache is empty or still loading |
+| `WatchConfluence` | Server-streaming updates when score or signal status changes (processor debounces duplicates); bootstraps before first push when needed |
 
-**Snapshot fields:** `ticker`, `timestamp`, `confluence_score`, `readiness`, `oi_status`, `market_status`, `signals` (gamma/delta/rsi/sector/market), `levels` (support/resistance ladder, `gamma_flip`), `daily_range_position`, `distance_to_entry`, `haptic_level`, `background_level`, plus `spot`, `rsi`, `sector_etf`, `stacked_zone`.
+**Snapshot fields:** `ticker`, `timestamp`, `confluence_score`, `readiness`, `oi_status`, `market_status`, `signals` (gamma/delta/rsi/sector/market), `levels` (support/resistance ladder, `gamma_flip`), `daily_range_position`, `distance_to_entry`, `haptic_level`, `background_level`, plus `spot`, `rsi`, `sector_etf`, `stacked_zone`, `data_as_of`.
 
 **Local plaintext for jax-ov (Phase 4 prep)**
 
@@ -162,20 +163,25 @@ This binds **127.0.0.1:50051** only and disables mTLS for **all** gRPC services 
 
 Without that flag, use mTLS client certificates (see Security section) or grpcurl with `-cacert`, `-cert`, and `-key`.
 
-`GetConfluence` may return an initial loading snapshot (`oi_status: loading`, score 0) immediately after activation; use `WatchConfluence` for scored updates as data loads.
+Outside RTH, `GetConfluence` blocks up to 90s while bootstrapping from Massive. A useful closed-market response has `market_status: "closed"`, `oi_status: "ready"`, non-empty `levels`, and `data_as_of` set to the last trade/OI timestamp.
 
 **grpcurl examples (plaintext local mode)**
 
 ```bash
 export POLYGON_API_KEY=your_massive_api_key
+export JAX_ENV=local
 export JAX_CONFLUENCE_INSECURE_LOCAL=true
 make run
 
 # List services (ConfluenceService should appear)
 grpcurl -plaintext localhost:50051 list
 
-# One-shot snapshot (activates ticker, waits for first compute)
+# One-shot snapshot (bootstraps from Massive when cache is cold; works outside RTH)
 grpcurl -plaintext -d '{"ticker": "NVDA"}' localhost:50051 jax.v1.ConfluenceService/GetConfluence
+
+# Outside RTH — expect market_status "closed", oi_status "ready", populated levels, data_as_of > 0
+grpcurl -plaintext -d '{"ticker": "NVDA"}' localhost:50051 jax.v1.ConfluenceService/GetConfluence \
+  | jq '{market_status, oi_status, confluence_score, data_as_of, levels: .levels | {gamma_flip, support: (.support|length), resistance: (.resistance|length)}}'
 
 # Live stream
 grpcurl -plaintext -d '{"ticker": "NVDA"}' localhost:50051 jax.v1.ConfluenceService/WatchConfluence

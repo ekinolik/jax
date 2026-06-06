@@ -71,11 +71,12 @@ func TestWatchSubscribeAndSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	defer unsub()
 
+	// Without a polygon client bootstrap cannot score; unscored placeholders are not pushed.
 	select {
 	case snap := <-ch:
 		assert.Equal(t, "NVDA", snap.Ticker)
-	case <-time.After(time.Second):
-		t.Fatal("expected initial snapshot on watch")
+		assert.False(t, SnapshotNeedsBootstrap(snap))
+	case <-time.After(200 * time.Millisecond):
 	}
 
 	got, ok := p.GetSnapshot("NVDA")

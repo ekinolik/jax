@@ -8,12 +8,13 @@ import (
 	"time"
 
 	confluencev1 "github.com/ekinolik/jax/api/proto/confluence/v1"
+	intconfluence "github.com/ekinolik/jax/internal/confluence"
 	pkgconfluence "github.com/ekinolik/jax/pkg/confluence"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-const defaultGetConfluenceTimeout = 30 * time.Second
+const defaultGetConfluenceTimeout = 90 * time.Second
 
 // ConfluenceProcessor is the subset of the confluence processor used by gRPC handlers.
 type ConfluenceProcessor interface {
@@ -21,6 +22,7 @@ type ConfluenceProcessor interface {
 	Watch(ctx context.Context, ticker string) (<-chan *pkgconfluence.ConfluenceSnapshot, func(), error)
 	OnSubscribe(ctx context.Context, ticker string, now time.Time) error
 	OnUnsubscribe(ticker string)
+	BootstrapSnapshot(ctx context.Context, ticker string) (*pkgconfluence.ConfluenceSnapshot, error)
 }
 
 // ConfluenceService serves ConfluenceService gRPC requests.
@@ -47,29 +49,36 @@ func parseConfluenceTicker(method, raw string) (string, error) {
 	return ticker, nil
 }
 
-// GetConfluence returns the latest snapshot, activating the ticker and waiting briefly if needed.
+// GetConfluence returns the latest snapshot, bootstrapping from Massive when no scored cache exists.
 func (s *ConfluenceService) GetConfluence(ctx context.Context, req *confluencev1.GetConfluenceRequest) (*confluencev1.ConfluenceSnapshot, error) {
 	ticker, err := parseConfluenceTicker("GetConfluence", req.GetTicker())
 	if err != nil {
 		return nil, err
 	}
 
-	if snap, ok := s.processor.GetSnapshot(ticker); ok && snap != nil {
+	if snap, ok := s.processor.GetSnapshot(ticker); ok && snap != nil && !intconfluence.SnapshotNeedsBootstrap(snap) {
 		return SnapshotToProto(snap), nil
 	}
 
-	activateCtx, activateCancel := context.WithTimeout(ctx, s.timeout)
-	defer activateCancel()
+	handlerCtx, handlerCancel := context.WithTimeout(ctx, s.timeout)
+	defer handlerCancel()
 
-	if err := s.processor.OnSubscribe(activateCtx, ticker, time.Now().UTC()); err != nil {
+	if err := s.processor.OnSubscribe(handlerCtx, ticker, time.Now().UTC()); err != nil {
 		return nil, mapConfluenceError(err)
 	}
 	defer s.processor.OnUnsubscribe(ticker)
 
-	waitCtx, waitCancel := context.WithTimeout(ctx, s.timeout)
-	defer waitCancel()
+	if snap, ok := s.processor.GetSnapshot(ticker); ok && snap != nil && !intconfluence.SnapshotNeedsBootstrap(snap) {
+		return SnapshotToProto(snap), nil
+	}
 
-	snap, err := waitForSnapshot(waitCtx, s.processor, ticker, s.timeout)
+	if snap, err := s.processor.BootstrapSnapshot(handlerCtx, ticker); err == nil && snap != nil && !intconfluence.SnapshotNeedsBootstrap(snap) {
+		return SnapshotToProto(snap), nil
+	} else if err != nil {
+		log.Printf("[confluence] GetConfluence bootstrap %s: %v", ticker, err)
+	}
+
+	snap, err := waitForReadySnapshot(handlerCtx, s.processor, ticker, s.timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -108,13 +117,13 @@ func (s *ConfluenceService) WatchConfluence(req *confluencev1.WatchConfluenceReq
 	}
 }
 
-func waitForSnapshot(ctx context.Context, processor ConfluenceProcessor, ticker string, timeout time.Duration) (*pkgconfluence.ConfluenceSnapshot, error) {
+func waitForReadySnapshot(ctx context.Context, processor ConfluenceProcessor, ticker string, timeout time.Duration) (*pkgconfluence.ConfluenceSnapshot, error) {
 	ticker = pkgconfluence.NormalizeTicker(ticker)
 	tickerWait := time.NewTicker(100 * time.Millisecond)
 	defer tickerWait.Stop()
 
 	for {
-		if snap, ok := processor.GetSnapshot(ticker); ok && snap != nil {
+		if snap, ok := processor.GetSnapshot(ticker); ok && snap != nil && !intconfluence.SnapshotNeedsBootstrap(snap) {
 			return snap, nil
 		}
 		select {
@@ -122,7 +131,7 @@ func waitForSnapshot(ctx context.Context, processor ConfluenceProcessor, ticker 
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return nil, status.Errorf(
 					codes.DeadlineExceeded,
-					"no confluence snapshot for %s within %s; market may be closed or data still loading — use WatchConfluence for live updates",
+					"no scored confluence snapshot for %s within %s; bootstrap may have failed or data is unavailable",
 					ticker,
 					timeout,
 				)

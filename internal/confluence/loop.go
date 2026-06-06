@@ -72,6 +72,7 @@ func (p *Processor) Start(ctx context.Context) error {
 		defer p.wg.Done()
 		p.runRTHMonitor()
 	}()
+	go p.bootstrapWatchlistIfClosed()
 	return nil
 }
 

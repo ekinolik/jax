@@ -3,6 +3,7 @@ package confluence
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -39,6 +40,9 @@ type Processor struct {
 
 	prefetchMu       sync.Mutex
 	lastPrefetchDate string
+
+	bootstrapMu    sync.Mutex
+	bootstrapLocks map[string]*sync.Mutex
 }
 
 // NewProcessor creates a confluence processor wired to settings and dependencies.
@@ -115,6 +119,14 @@ func (p *Processor) Watch(ctx context.Context, ticker string) (<-chan *pkgconflu
 		return nil, nil, err
 	}
 
+	if snap, ok := p.LatestSnapshot(ticker); !ok || SnapshotNeedsBootstrap(snap) {
+		bootstrapCtx, cancel := context.WithTimeout(ctx, bootstrapTimeout)
+		if _, err := p.BootstrapSnapshot(bootstrapCtx, ticker); err != nil {
+			log.Printf("[confluence] bootstrap watch %s: %v", ticker, err)
+		}
+		cancel()
+	}
+
 	ch := make(chan *pkgconfluence.ConfluenceSnapshot, 4)
 	p.tickerMu.Lock()
 	rt := p.tickers[ticker]
@@ -123,7 +135,7 @@ func (p *Processor) Watch(ctx context.Context, ticker string) (<-chan *pkgconflu
 	rt.watchers[id] = ch
 	p.tickerMu.Unlock()
 
-	if snap, ok := p.LatestSnapshot(ticker); ok {
+	if snap, ok := p.LatestSnapshot(ticker); ok && !SnapshotNeedsBootstrap(snap) {
 		select {
 		case ch <- snap:
 		default:
@@ -171,7 +183,7 @@ func (p *Processor) RecomputeSnapshot(ticker string, in pkgconfluence.ScoreInput
 	if entry, ok := p.registry.Get(ticker); ok {
 		oiStatus = entry.OIState
 	}
-	if len(in.Slices) > 0 && oiStatus != pkgconfluence.OIStatusError {
+	if len(in.Slices) > 0 {
 		oiStatus = pkgconfluence.OIStatusReady
 	}
 
@@ -182,8 +194,30 @@ func (p *Processor) RecomputeSnapshot(ticker string, in pkgconfluence.ScoreInput
 
 	snap = new(pkgconfluence.ConfluenceSnapshot)
 	*snap = signals.BuildSnapshot(in)
+	if snap.DataAsOf.IsZero() {
+		snap.DataAsOf = dataAsOfFromScoreInput(in)
+	}
 	p.SetSnapshot(ticker, snap)
 	return snap, nil
+}
+
+func dataAsOfFromScoreInput(in pkgconfluence.ScoreInput) time.Time {
+	if !in.DataAsOf.IsZero() {
+		return in.DataAsOf.UTC()
+	}
+	latest := in.SpotTime
+	for _, sl := range in.Slices {
+		if sl.GreeksAsOf.After(latest) {
+			latest = sl.GreeksAsOf
+		}
+		if sl.OIAsOf.After(latest) {
+			latest = sl.OIAsOf
+		}
+	}
+	if latest.IsZero() {
+		latest = in.Now
+	}
+	return latest.UTC()
 }
 
 // OnUnsubscribe decrements registry ref-count for a ticker.

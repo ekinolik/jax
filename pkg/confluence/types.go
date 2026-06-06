@@ -143,6 +143,9 @@ type ScoreInput struct {
 	IntradayLow  float64
 
 	Now time.Time
+
+	// DataAsOf is the latest timestamp among spot, greeks, and OI inputs (bootstrap / stale reads).
+	DataAsOf time.Time
 }
 
 // ConfluenceSnapshot is the latest computed snapshot for a watched ticker.
@@ -154,6 +157,8 @@ type ConfluenceSnapshot struct {
 	OIStatus     OIStatus
 	MarketStatus MarketStatus
 	UpdatedAt    time.Time
+	// DataAsOf is when underlying market/options inputs were last observed (may be stale outside RTH).
+	DataAsOf time.Time
 
 	Levels          Levels
 	Signals         []Signal

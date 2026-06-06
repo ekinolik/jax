@@ -32,6 +32,9 @@ func SnapshotToProto(snap *pkgconfluence.ConfluenceSnapshot) *confluencev1.Confl
 	if !snap.SpotTime.IsZero() {
 		out.SpotTimestamp = snap.SpotTime.Unix()
 	}
+	if !snap.DataAsOf.IsZero() {
+		out.DataAsOf = snap.DataAsOf.Unix()
+	}
 	for _, sig := range snap.Signals {
 		out.Signals = append(out.Signals, signalToProto(sig))
 	}

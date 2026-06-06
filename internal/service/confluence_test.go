@@ -15,10 +15,11 @@ import (
 )
 
 type mockConfluenceProcessor struct {
-	snapshots       map[string]*pkgconfluence.ConfluenceSnapshot
-	onSubErr        error
-	watchErr        error
-	subscribeCount  int
+	snapshots        map[string]*pkgconfluence.ConfluenceSnapshot
+	onSubErr         error
+	watchErr         error
+	bootstrapErr     error
+	subscribeCount   int
 	unsubscribeCount int
 }
 
@@ -35,6 +36,17 @@ func (m *mockConfluenceProcessor) OnSubscribe(ctx context.Context, ticker string
 
 func (m *mockConfluenceProcessor) OnUnsubscribe(ticker string) {
 	m.unsubscribeCount++
+}
+
+func (m *mockConfluenceProcessor) BootstrapSnapshot(ctx context.Context, ticker string) (*pkgconfluence.ConfluenceSnapshot, error) {
+	if m.bootstrapErr != nil {
+		return nil, m.bootstrapErr
+	}
+	ticker = pkgconfluence.NormalizeTicker(ticker)
+	if snap, ok := m.snapshots[ticker]; ok {
+		return snap, nil
+	}
+	return nil, context.DeadlineExceeded
 }
 
 func (m *mockConfluenceProcessor) Watch(ctx context.Context, ticker string) (<-chan *pkgconfluence.ConfluenceSnapshot, func(), error) {
@@ -76,7 +88,9 @@ func TestGetConfluence_cachedSnapshot(t *testing.T) {
 		Ticker:        "NVDA",
 		Score:         55,
 		ReadinessBand: pkgconfluence.ReadinessPossibleEntry,
+		OIStatus:      pkgconfluence.OIStatusReady,
 		UpdatedAt:     time.Now().UTC(),
+		Levels:        pkgconfluence.Levels{GammaFlip: 118.0},
 	}
 	proc := &mockConfluenceProcessor{snapshots: map[string]*pkgconfluence.ConfluenceSnapshot{"NVDA": snap}}
 	svc := NewConfluenceService(proc)
@@ -184,6 +198,10 @@ func (b *blockingMockProcessor) OnSubscribe(context.Context, string, time.Time) 
 
 func (b *blockingMockProcessor) OnUnsubscribe(string) {}
 
+func (b *blockingMockProcessor) BootstrapSnapshot(context.Context, string) (*pkgconfluence.ConfluenceSnapshot, error) {
+	return nil, context.DeadlineExceeded
+}
+
 func (b *blockingMockProcessor) Watch(ctx context.Context, ticker string) (<-chan *pkgconfluence.ConfluenceSnapshot, func(), error) {
 	return b.ch, func() {}, nil
 }
@@ -219,7 +237,9 @@ func (d *delayedMockProcessor) GetSnapshot(ticker string) (*pkgconfluence.Conflu
 		Ticker:        pkgconfluence.NormalizeTicker(ticker),
 		Score:         80,
 		ReadinessBand: pkgconfluence.ReadinessHighConviction,
+		OIStatus:      pkgconfluence.OIStatusReady,
 		UpdatedAt:     time.Now().UTC(),
+		Levels:        pkgconfluence.Levels{GammaFlip: 200.0},
 	}, true
 }
 
@@ -231,6 +251,10 @@ func (d *delayedMockProcessor) OnSubscribe(context.Context, string, time.Time) e
 
 func (d *delayedMockProcessor) OnUnsubscribe(string) {
 	d.unsubscribeCount++
+}
+
+func (d *delayedMockProcessor) BootstrapSnapshot(context.Context, string) (*pkgconfluence.ConfluenceSnapshot, error) {
+	return nil, context.DeadlineExceeded
 }
 
 func (d *delayedMockProcessor) Watch(context.Context, string) (<-chan *pkgconfluence.ConfluenceSnapshot, func(), error) {

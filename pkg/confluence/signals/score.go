@@ -21,6 +21,7 @@ func BuildSnapshot(in confluence.ScoreInput) confluence.ConfluenceSnapshot {
 		OIStatus:     in.OIStatus,
 		MarketStatus: in.MarketStatus,
 		UpdatedAt:    now,
+		DataAsOf:     in.DataAsOf,
 		RSI:          in.RSI,
 		SectorETF:    in.SectorETF,
 	}
