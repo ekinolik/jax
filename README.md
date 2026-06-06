@@ -200,6 +200,8 @@ grpcurl \
 
 **Later phases:** jax-ov WebSocket gateway (Phase 4).
 
+**LLM batch analysis:** [docs/confluence-llm-analysis.md](docs/confluence-llm-analysis.md) — field glossary, prompts, and ranking rubric for pasting Confluence JSON into Claude/OpenAI.
+
 ## Available Methods
 
 ### OptionService
