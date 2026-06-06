@@ -8,17 +8,24 @@ import (
 	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
 	"os"
+	"os/signal"
+	"path/filepath"
 	"runtime"
+	"syscall"
 	"time"
 
 	marketv1 "github.com/ekinolik/jax/api/proto/market/v1"
 	optionv1 "github.com/ekinolik/jax/api/proto/option/v1"
 	"github.com/ekinolik/jax/internal/cache"
 	"github.com/ekinolik/jax/internal/config"
+	intconfluence "github.com/ekinolik/jax/internal/confluence"
 	"github.com/ekinolik/jax/internal/polygon"
 	"github.com/ekinolik/jax/internal/scheduler"
 	"github.com/ekinolik/jax/internal/service"
+	"github.com/ekinolik/jax/internal/stream"
+	pkgconfluence "github.com/ekinolik/jax/pkg/confluence"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -28,14 +35,11 @@ import (
 )
 
 func init() {
-	// Configure logging
 	log.SetFlags(log.Ldate | log.Ltime | log.LUTC)
 	log.SetOutput(os.Stdout)
 }
 
-// loadTLSCredentials loads TLS credentials for mutual TLS
 func loadTLSCredentials() (credentials.TransportCredentials, error) {
-	// Load certificate of the CA who signed client's certificate
 	pemClientCA, err := ioutil.ReadFile("certs/ca/ca.crt")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read client CA certificate: %v", err)
@@ -46,23 +50,20 @@ func loadTLSCredentials() (credentials.TransportCredentials, error) {
 		return nil, fmt.Errorf("failed to add client CA's certificate")
 	}
 
-	// Load server's certificate and private key
 	serverCert, err := tls.LoadX509KeyPair("certs/server/server.crt", "certs/server/server.key")
 	if err != nil {
 		return nil, fmt.Errorf("failed to load server certificate and key: %v", err)
 	}
 
-	// Create the credentials and return it
-	config := &tls.Config{
+	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{serverCert},
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ClientCAs:    certPool,
 	}
 
-	return credentials.NewTLS(config), nil
+	return credentials.NewTLS(tlsConfig), nil
 }
 
-// loggingInterceptor logs all gRPC method calls
 func loggingInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	start := time.Now()
 	clientIP := "unknown"
@@ -70,14 +71,11 @@ func loggingInterceptor(ctx context.Context, req interface{}, info *grpc.UnarySe
 		clientIP = p.Addr.String()
 	}
 
-	// Log the request
 	log.Printf("[gRPC] %s - client_ip=%s method=%s request=%+v",
 		"REQUEST", clientIP, info.FullMethod, req)
 
-	// Call the handler
 	resp, err := handler(ctx, req)
 
-	// Calculate duration
 	duration := time.Since(start)
 
 	if err != nil {
@@ -87,18 +85,15 @@ func loggingInterceptor(ctx context.Context, req interface{}, info *grpc.UnarySe
 		return nil, err
 	}
 
-	// Log the response
 	log.Printf("[gRPC] %s - client_ip=%s method=%s duration=%s",
 		"SUCCESS", clientIP, info.FullMethod, duration)
 
 	return resp, nil
 }
 
-// recoveryInterceptor recovers from panics and converts them to gRPC errors
 func recoveryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			// Get stack trace
 			buf := make([]byte, 64<<10)
 			n := runtime.Stack(buf, false)
 			stackTrace := string(buf[:n])
@@ -114,7 +109,6 @@ func recoveryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryS
 	return handler(ctx, req)
 }
 
-// chainInterceptors creates a single interceptor from multiple interceptors
 func chainInterceptors(interceptors ...grpc.UnaryServerInterceptor) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		chain := handler
@@ -130,7 +124,6 @@ func chainInterceptors(interceptors ...grpc.UnaryServerInterceptor) grpc.UnarySe
 }
 
 func startCacheAndCreateScheduler(cfg *config.Config) *scheduler.Scheduler {
-	// Create cache manager with type-specific configurations
 	cacheConfig := cache.Config{
 		StorageType: cache.Disk,
 		BasePath:    cfg.CacheDir,
@@ -138,19 +131,19 @@ func startCacheAndCreateScheduler(cfg *config.Config) *scheduler.Scheduler {
 		TypeConfigs: map[cache.DataType]cache.TypeConfig{
 			cache.OptionChains: {
 				StorageType: cache.Disk,
-				TTL:         cfg.DexCacheTTL, // Use existing config value
+				TTL:         cfg.DexCacheTTL,
 				Compression: true,
 				KeyPrefix:   "options",
 			},
 			cache.LastTrades: {
 				StorageType: cache.Memory,
-				TTL:         cfg.MarketCacheTTL, // Use existing config value
+				TTL:         cfg.MarketCacheTTL,
 				Compression: false,
 				KeyPrefix:   "last-trade",
 			},
 			cache.Aggregates: {
 				StorageType: cache.Disk,
-				TTL:         cfg.AggregateCacheTTL, // Use existing config value
+				TTL:         cfg.AggregateCacheTTL,
 				Compression: true,
 				KeyPrefix:   "aggs",
 			},
@@ -161,18 +154,58 @@ func startCacheAndCreateScheduler(cfg *config.Config) *scheduler.Scheduler {
 		log.Fatalf("Failed to create cache manager: %v", err)
 	}
 
-	// Create Polygon client
 	client := polygon.NewClient(cfg)
-
-	// Create scheduler
 	sched := scheduler.NewScheduler(cacheManager, client)
 
-	// Load tasks from configuration
 	if err := sched.LoadTasks("cache-configs/cache_tasks.yaml", time.Minute); err != nil {
 		log.Fatalf("Failed to load tasks: %v", err)
 	}
 
 	return sched
+}
+
+func startConfluence(cfg *config.Config) (*intconfluence.Processor, *stream.Hub, *http.Server) {
+	settingsPath := filepath.Join("confluence-configs", "settings.yaml")
+	sectorsPath := filepath.Join("confluence-configs", "sic_sectors.yaml")
+
+	settings, err := pkgconfluence.LoadSettings(settingsPath)
+	if err != nil {
+		log.Fatalf("Failed to load confluence settings: %v", err)
+	}
+	sectors, err := pkgconfluence.LoadSICSectors(sectorsPath)
+	if err != nil {
+		log.Fatalf("Failed to load sic sectors: %v", err)
+	}
+
+	oiCache, err := intconfluence.NewOICache("")
+	if err != nil {
+		log.Fatalf("Failed to create OI cache: %v", err)
+	}
+
+	hub, err := stream.NewHub(cfg.PolygonAPIKey)
+	if err != nil {
+		log.Fatalf("Failed to create stream hub: %v", err)
+	}
+
+	client := polygon.NewClient(cfg)
+	registry := intconfluence.NewRegistry(settings.MaxActiveTickers)
+	processor := intconfluence.NewProcessor(settings, sectors, registry, oiCache, client, hub)
+
+	ctx := context.Background()
+	if err := hub.Start(ctx); err != nil {
+		log.Fatalf("Failed to start stream hub: %v", err)
+	}
+	if err := processor.Start(ctx); err != nil {
+		log.Fatalf("Failed to start confluence processor: %v", err)
+	}
+	log.Printf("[confluence] processor started (max_active_tickers=%d)", settings.MaxActiveTickers)
+
+	var debugSrv *http.Server
+	if addr := intconfluence.DebugPortFromEnv(os.Getenv("JAX_CONFLUENCE_DEBUG_PORT")); addr != "" {
+		debugSrv = intconfluence.StartDebugServer(addr, processor)
+	}
+
+	return processor, hub, debugSrv
 }
 
 func main() {
@@ -185,47 +218,51 @@ func main() {
 	sched.Start()
 	defer sched.Stop()
 
+	processor, hub, debugSrv := startConfluence(cfg)
+	defer hub.Stop()
+	defer processor.Stop()
+	if debugSrv != nil {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = debugSrv.Shutdown(shutdownCtx)
+		}()
+	}
+
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Port))
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	// Load TLS credentials
 	tlsCredentials, err := loadTLSCredentials()
 	if err != nil {
 		log.Fatalf("failed to load TLS credentials: %v", err)
 	}
 
-	// Create gRPC server with TLS and interceptors
 	s := grpc.NewServer(
 		grpc.Creds(tlsCredentials),
 		grpc.UnaryInterceptor(chainInterceptors(recoveryInterceptor, loggingInterceptor)),
 	)
 
-	// Register services
-	/*
-		optionService, err := service.NewOptionService(cfg)
-		if err != nil {
-			log.Fatalf("failed to create option service: %v", err)
-		}
-	*/
 	optionService := service.NewOptionService(cfg, sched.GetCache())
 	optionv1.RegisterOptionServiceServer(s, optionService)
 
-	/*
-		marketService, err := service.NewMarketService(cfg)
-		if err != nil {
-			log.Fatalf("failed to create market service: %v", err)
-		}
-	*/
 	marketService := service.NewMarketService(cfg, sched.GetCache())
 	marketv1.RegisterMarketServiceServer(s, marketService)
 
-	// Register reflection service on gRPC server
 	reflection.Register(s)
 
-	log.Printf("Starting gRPC server on port %d with mTLS enabled", cfg.Port)
-	if err := s.Serve(lis); err != nil {
-		log.Fatalf("failed to serve: %v", err)
-	}
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		log.Printf("Starting gRPC server on port %d with mTLS enabled", cfg.Port)
+		if err := s.Serve(lis); err != nil {
+			log.Fatalf("failed to serve: %v", err)
+		}
+	}()
+
+	<-sigCh
+	log.Printf("Shutting down...")
+	s.GracefulStop()
 }

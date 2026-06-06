@@ -104,8 +104,9 @@ func (s *Settings) applyDefaults() {
 
 // UsesDualExpiration reports whether ticker should fetch two expirations for OI.
 func (s *Settings) UsesDualExpiration(ticker string) bool {
+	ticker = NormalizeTicker(ticker)
 	for _, t := range s.DualExpirationTickers {
-		if t == ticker {
+		if NormalizeTicker(t) == ticker {
 			return true
 		}
 	}

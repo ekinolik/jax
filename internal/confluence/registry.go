@@ -41,8 +41,14 @@ func (r *Registry) Subscribe(ticker string) (*TickerEntry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if entry, ok := r.entries[ticker]; ok && entry.SubscriberCount > 0 {
-		entry.SubscriberCount++
+	if entry, ok := r.entries[ticker]; ok {
+		if entry.SubscriberCount > 0 {
+			entry.SubscriberCount++
+			entry.IdleSince = time.Time{}
+			return entry, nil
+		}
+		// Re-subscribe during idle grace: revive without counting against cap.
+		entry.SubscriberCount = 1
 		entry.IdleSince = time.Time{}
 		return entry, nil
 	}
@@ -91,6 +97,13 @@ func (r *Registry) Get(ticker string) (*TickerEntry, bool) {
 	return entry, ok
 }
 
+// HasEntries reports whether any ticker remains registered (including idle grace).
+func (r *Registry) HasEntries() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.entries) > 0
+}
+
 // ActiveTickers returns tickers with at least one subscriber.
 func (r *Registry) ActiveTickers() []string {
 	r.mu.Lock()
@@ -123,6 +136,27 @@ func (r *Registry) MarkGreeksRefresh(ticker string, at time.Time) {
 	if entry, ok := r.entries[ticker]; ok {
 		entry.LastGreeksAt = at
 	}
+}
+
+// IdleTickers returns tickers with zero subscribers idle longer than grace.
+func (r *Registry) IdleTickers(grace time.Duration) []string {
+	now := time.Now().UTC()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var tickers []string
+	for ticker, entry := range r.entries {
+		if entry.SubscriberCount > 0 {
+			continue
+		}
+		if entry.IdleSince.IsZero() {
+			continue
+		}
+		if now.Sub(entry.IdleSince) >= grace {
+			tickers = append(tickers, ticker)
+		}
+	}
+	return tickers
 }
 
 func (r *Registry) activeCountLocked() int {

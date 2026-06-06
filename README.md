@@ -6,16 +6,20 @@ JAX is a gRPC service that calculates delta exposure (DEX) and gamma exposure (G
 
 JAX uses the official [`github.com/massive-com/client-go/v2`](https://github.com/massive-com/client-go) client for REST and WebSocket access. Set `POLYGON_API_KEY` with your Massive.com API key (the environment variable name is unchanged for backward compatibility).
 
-## Confluence Data API (Phase 0 foundation)
+## Confluence Data API (Phase 0–2)
 
-Phase 0 adds the core data layer for confluence scoring without exposing gRPC yet:
+Phase 0 adds the data layer; **Phase 1** adds multi-level GEX/DEX support/resistance, signal calculators, and composite scoring; **Phase 2** wires the event-driven processor into `cmd/server` with stream hub spot ticks, greeks timers, daily OI prefetch, and in-memory snapshot cache.
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| Types & expiration logic | `pkg/confluence/` | `StrikeProfile`, `OptionSlice`, `ConfluenceSnapshot`, monthly OPEX classifier |
+| Types & expiration logic | `pkg/confluence/` | `StrikeProfile`, `OptionSlice`, `ConfluenceSnapshot`, `ScoreInput` |
+| Signal calculators | `pkg/confluence/signals/` | GEX/DEX levels, gamma/delta/RSI/market/sector/range/entry signals |
+| Composite scoring | `pkg/confluence/score.go` | Weighted 0–100 score, readiness bands, haptic/background levels |
+| Snapshot builder | `pkg/confluence/signals/score.go` | `BuildSnapshot` — assembles full `ConfluenceSnapshot` |
 | Massive REST extensions | `internal/polygon/` | `GetRSI`, `GetTickerOverview`, `GetOptionSlice`, expiration resolver |
 | Stream hub | `internal/stream/` | Real-time stock trade WebSocket (`T.*`) spot state |
-| Processor skeleton | `internal/confluence/` | Active ticker registry, same-day OI disk cache, RTH gate |
+| Processor | `internal/confluence/` | Event loop, registry, OI cache, RTH gate, `Watch`/`GetSnapshot`, `RecomputeSnapshot` |
+| Fetch helpers | `internal/confluence/fetch.go` | Shared OI/greeks/day-stats fetch logic (server + CLI) |
 | Config | `confluence-configs/` | Prefetch watchlist, dual-expiration tickers, SIC→ETF map |
 
 **Environment**
@@ -23,16 +27,117 @@ Phase 0 adds the core data layer for confluence scoring without exposing gRPC ye
 ```bash
 export POLYGON_API_KEY=your_massive_api_key
 export CONFLUENCE_CACHE_DIR=./cache/confluence   # same-day OI cache (default)
+export JAX_CONFLUENCE_DEBUG_PORT=8081          # optional: GET /confluence/debug?ticker=NVDA
 ```
 
-**Design notes (Phase 0)**
+### Phase 1 — Signals & scoring
 
-- RSI is fetched fresh on every recompute path — never cached
+**Multi-level support/resistance** (`signals/levels.go`)
+
+- Per-strike `netGEX` / `netDEX` from `OptionSlice` × live spot (same sign convention as `OptionService`)
+- Peak detection: local maxima, keep peaks >20% of per-source max, merge same-source peaks within 0.5% of spot
+- Dual-expiration merge (e.g. SPY): levels from multiple slices combined with `expiry_weight`
+- Output: `gamma_flip`, ranked `support[]` / `resistance[]`, `nearest_support`, `nearest_resistance`
+
+**Signal axes** (weights sum to 100%)
+
+| Signal | Weight | Icon | Aligned heuristic |
+|--------|--------|------|-------------------|
+| Gamma support | 25% | G | Spot near rank-1 GEX support; stacked-zone bonus (+5 score) |
+| Delta support | 15% | D | Rank-1 DEX support below spot |
+| RSI | 20% | R | RSI-14 ≤ 35 (minute timespan, fresh on every recompute) |
+| Market | 20% | M | SPY + QQQ day % change vs open |
+| Sector | 20% | S | Target vs resolved sector ETF day change (SIC → `sic_sectors.yaml`) |
+
+**Readiness bands**
+
+| Score | Band | Background / haptic level |
+|-------|------|---------------------------|
+| 0–34 | `no_trade` | 0 |
+| 35–54 | `caution` | 1 |
+| 55–74 | `possible_entry` | 2 |
+| 75–100 | `high_conviction` | 3 |
+
+**Programmatic usage**
+
+```go
+snap := signals.BuildSnapshot(confluence.ScoreInput{
+    Ticker: "NVDA", Spot: 120.0, RSI: 32,
+    OIStatus: confluence.OIStatusReady,
+    Slices:   slices,
+    SPYOpen: 500, SPYSpot: 502, QQQOpen: 400, QQQSpot: 401,
+    TargetOpen: 118, ETFSpot: 201, ETFOpen: 200, SectorETF: "SMH",
+})
+// snap.Score, snap.ReadinessBand, snap.Signals, snap.Levels
+```
+
+When `OIStatus` is `loading`, GEX/DEX signals are suppressed; RSI, market, sector, and spot-based range still compute.
+
+**Design notes**
+
+- RSI is fetched fresh on every recompute — never cached
 - Open interest is cached on disk for the current trading day only (`oi/{TICKER}_{DATE}_{EXPIRATION}.json`)
 - Confluence processing runs during regular trading hours (9:30–16:00 ET, configurable in `confluence-configs/settings.yaml`)
 - SPY uses dual expiration (soonest + soonest weekly Friday) for OI levels
 
-Later phases add the scoring engine, gRPC `ConfluenceService`, and jax-ov WebSocket gateway.
+### CLI test tool
+
+One-shot confluence snapshot for a single ticker (no server or stream hub):
+
+```bash
+export POLYGON_API_KEY=your_massive_api_key
+
+# Run directly
+go run ./cmd/confluence-test --ticker NVDA
+
+# Or build first
+make confluence-test
+./bin/confluence-test --ticker NVDA
+```
+
+Flags:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--ticker` | *(required)* | Ticker symbol to score |
+| `--config-dir` | `confluence-configs/` | Settings and SIC sector mappings |
+| `--format` | `json` | Output format (`json` only in v1) |
+| `--json` | `true` | Pretty-print JSON to stdout |
+
+Progress messages go to stderr; the full `ConfluenceSnapshot` JSON goes to stdout. Requires `POLYGON_API_KEY`. Outside regular trading hours, day open/range fall back to the latest daily bar when minute aggregates are unavailable.
+
+### Phase 2 — Event-driven processor
+
+`make run` (or `go run cmd/server/main.go`) now starts alongside the gRPC server:
+
+- **Stream hub** — Massive stock trades WebSocket (`T.*`) for active watches plus SPY/QQQ/sector ETF benchmarks
+- **Processor loop** — spot ticks debounce full recompute (≤5s); greeks refresh every 60–90s (max 5 min) and on spot move >0.5%
+- **RTH only** — processing during 9:30–16:00 ET weekdays (`settings.yaml`); pre-market subscriptions get `market_status: closed` until open
+- **OI lifecycle** — lazy fetch on first `Watch` per day; 08:00 ET prefetch for `prefetch_watchlist`; same-day disk cache reused on restart
+- **Active ticker registry** — ref-counted `Watch` API; max 5 active tickers; 5 min idle grace after last unsubscribe
+- **Snapshot cache** — latest `ConfluenceSnapshot` per ticker in memory; push to `Watch` channels when score/signal status changes (30s duplicate debounce)
+- **Debug HTTP** (optional) — `GET http://127.0.0.1:PORT/confluence/debug?ticker=NVDA` when `JAX_CONFLUENCE_DEBUG_PORT` is set (loopback only)
+
+**Verify Phase 2**
+
+```bash
+export POLYGON_API_KEY=your_massive_api_key
+export JAX_CONFLUENCE_DEBUG_PORT=8081   # optional
+
+make run
+# Logs should include: [confluence] processor started (max_active_tickers=5)
+
+# One-shot scoring still works without the server:
+make confluence-test
+./bin/confluence-test --ticker NVDA
+
+# With debug port, after a Watch subscription (Phase 3 gRPC) or programmatic Watch:
+curl -s 'http://localhost:8081/confluence/debug?ticker=NVDA' | head
+```
+
+Graceful shutdown: `SIGINT`/`SIGTERM` stops gRPC, stream hub, and confluence processor.
+
+**Later phases:** gRPC `ConfluenceService` (Phase 3), jax-ov WebSocket gateway (Phase 4).
 
 ## Available Methods
 

@@ -19,14 +19,18 @@ type SpotTick struct {
 	Timestamp time.Time
 }
 
+// SpotHandler receives spot updates for subscribed tickers.
+type SpotHandler func(ticker string, tick SpotTick)
+
 // Hub maintains real-time spot state from Massive stock trade WebSocket (T.*).
 type Hub struct {
 	client *massivews.Client
 
-	mu      sync.RWMutex
-	spots   map[string]SpotTick
-	subs    map[string]int
-	started bool
+	mu           sync.RWMutex
+	spots        map[string]SpotTick
+	subs         map[string]int
+	spotHandlers []SpotHandler
+	started      bool
 
 	runCtx    context.Context
 	runCancel context.CancelFunc
@@ -144,6 +148,25 @@ func (h *Hub) Unsubscribe(ticker string) error {
 	return nil
 }
 
+// InjectSpot sets spot state and invokes registered handlers (for tests and REST fallback).
+func (h *Hub) InjectSpot(ticker string, tick SpotTick) {
+	ticker = pkgconfluence.NormalizeTicker(ticker)
+	h.mu.Lock()
+	h.spots[ticker] = tick
+	handlers := append([]SpotHandler(nil), h.spotHandlers...)
+	h.mu.Unlock()
+	for _, fn := range handlers {
+		fn(ticker, tick)
+	}
+}
+
+// OnSpotUpdate registers a callback invoked after each trade tick update.
+func (h *Hub) OnSpotUpdate(fn SpotHandler) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.spotHandlers = append(h.spotHandlers, fn)
+}
+
 // GetSpot returns the latest spot tick for a ticker, if available.
 func (h *Hub) GetSpot(ticker string) (SpotTick, bool) {
 	ticker = pkgconfluence.NormalizeTicker(ticker)
@@ -180,10 +203,18 @@ func (h *Hub) handleMessage(msg any) {
 		return
 	}
 
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.spots[trade.Symbol] = SpotTick{
+	symbol := pkgconfluence.NormalizeTicker(trade.Symbol)
+	tick := SpotTick{
 		Price:     trade.Price,
 		Timestamp: time.UnixMilli(trade.Timestamp).UTC(),
+	}
+
+	h.mu.Lock()
+	h.spots[symbol] = tick
+	handlers := append([]SpotHandler(nil), h.spotHandlers...)
+	h.mu.Unlock()
+
+	for _, fn := range handlers {
+		fn(symbol, tick)
 	}
 }

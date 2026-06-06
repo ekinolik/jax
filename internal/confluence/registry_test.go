@@ -32,6 +32,31 @@ func TestRegistryIdleDoesNotBlockCap(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestRegistryResubscribeIdleTickerAtCap(t *testing.T) {
+	reg := confluence.NewRegistry(1)
+
+	_, err := reg.Subscribe("SPY")
+	require.NoError(t, err)
+	reg.Unsubscribe("SPY")
+
+	_, err = reg.Subscribe("SPY")
+	require.NoError(t, err)
+}
+
+func TestRegistryIdleTickers(t *testing.T) {
+	reg := confluence.NewRegistry(5)
+	_, err := reg.Subscribe("SPY")
+	require.NoError(t, err)
+	reg.Unsubscribe("SPY")
+
+	entry, ok := reg.Get("SPY")
+	require.True(t, ok)
+	entry.IdleSince = time.Now().UTC().Add(-6 * time.Minute)
+
+	idle := reg.IdleTickers(5 * time.Minute)
+	assert.Contains(t, idle, "SPY")
+}
+
 func TestRegistryRefCount(t *testing.T) {
 	reg := confluence.NewRegistry(5)
 

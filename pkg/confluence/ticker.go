@@ -2,8 +2,11 @@ package confluence
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
+
+var tickerPattern = regexp.MustCompile(`^[A-Z0-9\-]{1,6}$`)
 
 // NormalizeTicker uppercases and trims a ticker symbol.
 func NormalizeTicker(ticker string) string {
@@ -16,7 +19,7 @@ func ValidateTicker(ticker string) error {
 	if ticker == "" {
 		return fmt.Errorf("empty ticker")
 	}
-	if strings.ContainsAny(ticker, `/\..`) {
+	if !tickerPattern.MatchString(ticker) {
 		return fmt.Errorf("invalid ticker %q", ticker)
 	}
 	return nil

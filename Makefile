@@ -62,6 +62,11 @@ proto:
 build:
 	go build -o bin/server cmd/server/main.go
 
+.PHONY: confluence-test
+confluence-test:
+	mkdir -p bin
+	go build -o bin/confluence-test ./cmd/confluence-test
+
 .PHONY: build-production
 build-production:
 	mkdir -p bin

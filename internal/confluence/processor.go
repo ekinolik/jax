@@ -9,11 +9,13 @@ import (
 	"github.com/ekinolik/jax/internal/polygon"
 	"github.com/ekinolik/jax/internal/stream"
 	pkgconfluence "github.com/ekinolik/jax/pkg/confluence"
+	"github.com/ekinolik/jax/pkg/confluence/signals"
 )
 
 // Processor coordinates confluence background work during regular trading hours.
 type Processor struct {
 	settings *pkgconfluence.Settings
+	sectors  *pkgconfluence.SICSectors
 	registry *Registry
 	oiCache  *OICache
 	client   *polygon.Client
@@ -21,23 +23,44 @@ type Processor struct {
 
 	mu        sync.RWMutex
 	snapshots map[string]*pkgconfluence.ConfluenceSnapshot
+
+	tickerMu sync.Mutex
+	tickers  map[string]*tickerRuntime
+
+	benchMu       sync.Mutex
+	benchmarkRefs map[string]int
+
+	dayStatsMu sync.Mutex
+	dayStats   map[string]DayStats
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+
+	prefetchMu       sync.Mutex
+	lastPrefetchDate string
 }
 
-// NewProcessor creates a confluence processor skeleton wired to settings and dependencies.
+// NewProcessor creates a confluence processor wired to settings and dependencies.
 func NewProcessor(
 	settings *pkgconfluence.Settings,
+	sectors *pkgconfluence.SICSectors,
 	registry *Registry,
 	oiCache *OICache,
 	client *polygon.Client,
 	hub *stream.Hub,
 ) *Processor {
 	return &Processor{
-		settings:  settings,
-		registry:  registry,
-		oiCache:   oiCache,
-		client:    client,
-		hub:       hub,
-		snapshots: make(map[string]*pkgconfluence.ConfluenceSnapshot),
+		settings:      settings,
+		sectors:       sectors,
+		registry:      registry,
+		oiCache:       oiCache,
+		client:        client,
+		hub:           hub,
+		snapshots:     make(map[string]*pkgconfluence.ConfluenceSnapshot),
+		tickers:       make(map[string]*tickerRuntime),
+		benchmarkRefs: make(map[string]int),
+		dayStats:      make(map[string]DayStats),
 	}
 }
 
@@ -47,6 +70,11 @@ func (p *Processor) IsRTH(now time.Time) (bool, error) {
 		return false, fmt.Errorf("confluence settings not loaded")
 	}
 	return p.settings.IsRTH(now)
+}
+
+// GetSnapshot returns the latest cached snapshot for a ticker.
+func (p *Processor) GetSnapshot(ticker string) (*pkgconfluence.ConfluenceSnapshot, bool) {
+	return p.LatestSnapshot(ticker)
 }
 
 // LatestSnapshot returns the in-memory snapshot for a ticker, if present.
@@ -78,65 +106,99 @@ func (p *Processor) MarketStatusFor(now time.Time) (pkgconfluence.MarketStatus, 
 	return pkgconfluence.MarketStatusClosed, nil
 }
 
-// OnSubscribe registers a ticker for processing when within RTH.
-// Full recompute/scoring is implemented in later phases.
+// Watch registers a ticker for live updates. The returned channel receives snapshots when
+// score or signal status changes (duplicate pushes debounced to 30s). Call unsubscribe when done.
+func (p *Processor) Watch(ctx context.Context, ticker string) (<-chan *pkgconfluence.ConfluenceSnapshot, func(), error) {
+	ticker = pkgconfluence.NormalizeTicker(ticker)
+	now := time.Now().UTC()
+	if err := p.activate(ctx, ticker, now); err != nil {
+		return nil, nil, err
+	}
+
+	ch := make(chan *pkgconfluence.ConfluenceSnapshot, 4)
+	p.tickerMu.Lock()
+	rt := p.tickers[ticker]
+	id := rt.nextWatcherID
+	rt.nextWatcherID++
+	rt.watchers[id] = ch
+	p.tickerMu.Unlock()
+
+	if snap, ok := p.LatestSnapshot(ticker); ok {
+		select {
+		case ch <- snap:
+		default:
+		}
+	}
+
+	unsub := func() {
+		p.removeWatcher(ticker, id)
+		p.OnUnsubscribe(ticker)
+	}
+	return ch, unsub, nil
+}
+
+// OnSubscribe registers a ticker for processing without a push channel.
 func (p *Processor) OnSubscribe(ctx context.Context, ticker string, now time.Time) error {
+	return p.activate(ctx, ticker, now)
+}
+
+// RecomputeSnapshot builds a scored snapshot from available inputs and stores it.
+func (p *Processor) RecomputeSnapshot(ticker string, in pkgconfluence.ScoreInput, now time.Time) (snap *pkgconfluence.ConfluenceSnapshot, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("snapshot compute panic for %s: %v", ticker, r)
+		}
+	}()
+
 	ticker = pkgconfluence.NormalizeTicker(ticker)
 	if err := pkgconfluence.ValidateTicker(ticker); err != nil {
-		return err
+		return nil, err
 	}
 
 	status, err := p.MarketStatusFor(now)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	entry, err := p.registry.Subscribe(ticker)
-	if err != nil {
-		return err
-	}
-
-	if p.hub != nil {
-		if err := p.hub.Subscribe(ticker); err != nil {
-			p.registry.Unsubscribe(ticker)
-			return fmt.Errorf("subscribe stream hub: %w", err)
-		}
-	}
-
-	snap := &pkgconfluence.ConfluenceSnapshot{
-		Ticker:       ticker,
-		OIStatus:     entry.OIState,
-		MarketStatus: status,
-		UpdatedAt:    now.UTC(),
-	}
-	if p.hub != nil {
+	if in.Spot <= 0 && p.hub != nil {
 		if tick, ok := p.hub.GetSpot(ticker); ok {
-			snap.Spot = tick.Price
-			snap.SpotTime = tick.Timestamp
+			in.Spot = tick.Price
+			in.SpotTime = tick.Timestamp
 		}
 	}
 
+	oiStatus := pkgconfluence.OIStatusLoading
+	if entry, ok := p.registry.Get(ticker); ok {
+		oiStatus = entry.OIState
+	}
+	if len(in.Slices) > 0 && oiStatus != pkgconfluence.OIStatusError {
+		oiStatus = pkgconfluence.OIStatusReady
+	}
+
+	in.Ticker = ticker
+	in.OIStatus = oiStatus
+	in.MarketStatus = status
+	in.Now = now
+
+	snap = new(pkgconfluence.ConfluenceSnapshot)
+	*snap = signals.BuildSnapshot(in)
 	p.SetSnapshot(ticker, snap)
-	_ = ctx
-	return nil
+	return snap, nil
 }
 
 // OnUnsubscribe decrements registry ref-count for a ticker.
+// Hub and timers are released after idleGracePeriod via deactivateTicker.
 func (p *Processor) OnUnsubscribe(ticker string) {
 	ticker = pkgconfluence.NormalizeTicker(ticker)
 	p.registry.Unsubscribe(ticker)
 
-	if p.hub != nil {
-		if err := p.hub.Unsubscribe(ticker); err != nil {
-			// Logged by caller in later phases; keep registry/hub best-effort in Phase 0.
-			_ = err
-		}
-	}
-
 	entry, ok := p.registry.Get(ticker)
 	if ok && entry.SubscriberCount == 0 {
-		p.mu.Lock()
-		delete(p.snapshots, ticker)
-		p.mu.Unlock()
+		p.stopGreeksTimer(ticker)
+		p.tickerMu.Lock()
+		if rt, ok := p.tickers[ticker]; ok {
+			p.stopTimersLocked(rt)
+		}
+		p.tickerMu.Unlock()
 	}
 }
