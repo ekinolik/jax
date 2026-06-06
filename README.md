@@ -137,7 +137,62 @@ curl -s 'http://localhost:8081/confluence/debug?ticker=NVDA' | head
 
 Graceful shutdown: `SIGINT`/`SIGTERM` stops gRPC, stream hub, and confluence processor.
 
-**Later phases:** gRPC `ConfluenceService` (Phase 3), jax-ov WebSocket gateway (Phase 4).
+### Phase 3 — gRPC ConfluenceService
+
+Proto: `api/proto/confluence/v1/confluence.proto`
+
+| RPC | Description |
+|-----|-------------|
+| `GetConfluence` | Returns latest snapshot; activates ticker and waits up to 30s if no cached snapshot |
+| `WatchConfluence` | Server-streaming updates when score or signal status changes (processor debounces duplicates) |
+
+**Snapshot fields:** `ticker`, `timestamp`, `confluence_score`, `readiness`, `oi_status`, `market_status`, `signals` (gamma/delta/rsi/sector/market), `levels` (support/resistance ladder, `gamma_flip`), `daily_range_position`, `distance_to_entry`, `haptic_level`, `background_level`, plus `spot`, `rsi`, `sector_etf`, `stacked_zone`.
+
+**Local plaintext for jax-ov (Phase 4 prep)**
+
+Production uses **mTLS** on port 50051 (see [Security](#security)). For local development and jax-ov on the same host, enable plaintext gRPC:
+
+```bash
+export JAX_ENV=local
+export JAX_CONFLUENCE_INSECURE_LOCAL=true
+make run
+```
+
+This binds **127.0.0.1:50051** only and disables mTLS for **all** gRPC services (Option, Market, Confluence). Only allowed when `JAX_ENV=local`.
+
+Without that flag, use mTLS client certificates (see Security section) or grpcurl with `-cacert`, `-cert`, and `-key`.
+
+`GetConfluence` may return an initial loading snapshot (`oi_status: loading`, score 0) immediately after activation; use `WatchConfluence` for scored updates as data loads.
+
+**grpcurl examples (plaintext local mode)**
+
+```bash
+export POLYGON_API_KEY=your_massive_api_key
+export JAX_CONFLUENCE_INSECURE_LOCAL=true
+make run
+
+# List services (ConfluenceService should appear)
+grpcurl -plaintext localhost:50051 list
+
+# One-shot snapshot (activates ticker, waits for first compute)
+grpcurl -plaintext -d '{"ticker": "NVDA"}' localhost:50051 jax.v1.ConfluenceService/GetConfluence
+
+# Live stream
+grpcurl -plaintext -d '{"ticker": "NVDA"}' localhost:50051 jax.v1.ConfluenceService/WatchConfluence
+```
+
+**mTLS example (production / default)**
+
+```bash
+grpcurl \
+  -cacert certs/ca/ca.crt \
+  -cert certs/client/client.crt \
+  -key certs/client/client.key \
+  -d '{"ticker": "NVDA"}' \
+  localhost:50051 jax.v1.ConfluenceService/GetConfluence
+```
+
+**Later phases:** jax-ov WebSocket gateway (Phase 4).
 
 ## Available Methods
 

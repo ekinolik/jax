@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	confluencev1 "github.com/ekinolik/jax/api/proto/confluence/v1"
 	marketv1 "github.com/ekinolik/jax/api/proto/market/v1"
 	optionv1 "github.com/ekinolik/jax/api/proto/option/v1"
 	"github.com/ekinolik/jax/internal/cache"
@@ -107,6 +108,23 @@ func recoveryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryS
 		}
 	}()
 	return handler(ctx, req)
+}
+
+func streamRecoveryInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			buf := make([]byte, 64<<10)
+			n := runtime.Stack(buf, false)
+			stackTrace := string(buf[:n])
+
+			log.Printf("[PANIC] stream method=%s panic=%v\n%s",
+				info.FullMethod,
+				r,
+				stackTrace)
+			err = status.Errorf(codes.Internal, "Internal server error")
+		}
+	}()
+	return handler(srv, ss)
 }
 
 func chainInterceptors(interceptors ...grpc.UnaryServerInterceptor) grpc.UnaryServerInterceptor {
@@ -229,20 +247,37 @@ func main() {
 		}()
 	}
 
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Port))
+	insecureLocal := os.Getenv("JAX_CONFLUENCE_INSECURE_LOCAL") == "true"
+	if insecureLocal && cfg.Env != config.EnvLocal {
+		log.Fatalf("JAX_CONFLUENCE_INSECURE_LOCAL is only allowed when JAX_ENV=local")
+	}
+
+	listenAddr := fmt.Sprintf(":%d", cfg.Port)
+	if insecureLocal {
+		listenAddr = fmt.Sprintf("127.0.0.1:%d", cfg.Port)
+	}
+	lis, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	tlsCredentials, err := loadTLSCredentials()
-	if err != nil {
-		log.Fatalf("failed to load TLS credentials: %v", err)
+	var serverOpts []grpc.ServerOption
+	serverOpts = append(serverOpts,
+		grpc.UnaryInterceptor(chainInterceptors(recoveryInterceptor, loggingInterceptor)),
+		grpc.StreamInterceptor(streamRecoveryInterceptor),
+	)
+
+	if insecureLocal {
+		log.Printf("[gRPC] JAX_CONFLUENCE_INSECURE_LOCAL=true: plaintext on %s (all services; loopback only)", listenAddr)
+	} else {
+		tlsCredentials, err := loadTLSCredentials()
+		if err != nil {
+			log.Fatalf("failed to load TLS credentials: %v", err)
+		}
+		serverOpts = append(serverOpts, grpc.Creds(tlsCredentials))
 	}
 
-	s := grpc.NewServer(
-		grpc.Creds(tlsCredentials),
-		grpc.UnaryInterceptor(chainInterceptors(recoveryInterceptor, loggingInterceptor)),
-	)
+	s := grpc.NewServer(serverOpts...)
 
 	optionService := service.NewOptionService(cfg, sched.GetCache())
 	optionv1.RegisterOptionServiceServer(s, optionService)
@@ -250,13 +285,20 @@ func main() {
 	marketService := service.NewMarketService(cfg, sched.GetCache())
 	marketv1.RegisterMarketServiceServer(s, marketService)
 
+	confluenceService := service.NewConfluenceService(processor)
+	confluencev1.RegisterConfluenceServiceServer(s, confluenceService)
+
 	reflection.Register(s)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		log.Printf("Starting gRPC server on port %d with mTLS enabled", cfg.Port)
+		if insecureLocal {
+			log.Printf("Starting gRPC server on port %d (plaintext, loopback-friendly for jax-ov)", cfg.Port)
+		} else {
+			log.Printf("Starting gRPC server on port %d with mTLS enabled", cfg.Port)
+		}
 		if err := s.Serve(lis); err != nil {
 			log.Fatalf("failed to serve: %v", err)
 		}
@@ -264,5 +306,15 @@ func main() {
 
 	<-sigCh
 	log.Printf("Shutting down...")
-	s.GracefulStop()
+	done := make(chan struct{})
+	go func() {
+		s.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		log.Printf("GracefulStop timed out after 15s; forcing Stop")
+		s.Stop()
+	}
 }
