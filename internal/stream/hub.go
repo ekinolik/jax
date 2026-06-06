@@ -13,6 +13,11 @@ import (
 	wsmodels "github.com/massive-com/client-go/v2/websocket/models"
 )
 
+const (
+	reconnectBaseDelay = time.Second
+	reconnectMaxDelay  = 60 * time.Second
+)
+
 // SpotTick is the latest trade price for a symbol.
 type SpotTick struct {
 	Price     float64
@@ -24,6 +29,7 @@ type SpotHandler func(ticker string, tick SpotTick)
 
 // Hub maintains real-time spot state from Massive stock trade WebSocket (T.*).
 type Hub struct {
+	apiKey string
 	client *massivews.Client
 
 	mu           sync.RWMutex
@@ -49,22 +55,19 @@ func NewHub(apiKey string) (*Hub, error) {
 	}
 
 	return &Hub{
+		apiKey: apiKey,
 		client: client,
 		spots:  make(map[string]SpotTick),
 		subs:   make(map[string]int),
 	}, nil
 }
 
-// Start connects to Massive and begins processing trade messages.
+// Start connects to Massive and begins processing trade messages with auto-reconnect.
 func (h *Hub) Start(ctx context.Context) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.started {
 		return nil
-	}
-
-	if err := h.client.Connect(); err != nil {
-		return fmt.Errorf("connect stream hub: %w", err)
 	}
 
 	h.runCtx, h.runCancel = context.WithCancel(ctx)
@@ -75,11 +78,12 @@ func (h *Hub) Start(ctx context.Context) error {
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("[stream] hub panic: %v", r)
+				h.mu.Lock()
+				h.started = false
+				h.mu.Unlock()
 			}
 		}()
-		if err := h.run(h.runCtx); err != nil && h.runCtx.Err() == nil {
-			log.Printf("[stream] hub stopped: %v", err)
-		}
+		h.runSupervisor(h.runCtx)
 	}()
 	return nil
 }
@@ -98,8 +102,8 @@ func (h *Hub) Stop() {
 	if cancel != nil {
 		cancel()
 	}
-	h.client.Close()
 	h.runWg.Wait()
+	h.closeClient()
 }
 
 // Subscribe registers interest in a ticker and subscribes to T.{ticker} when first referenced.
@@ -174,6 +178,92 @@ func (h *Hub) GetSpot(ticker string) (SpotTick, bool) {
 	defer h.mu.RUnlock()
 	tick, ok := h.spots[ticker]
 	return tick, ok
+}
+
+func (h *Hub) runSupervisor(ctx context.Context) {
+	delay := reconnectBaseDelay
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if err := h.runSession(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("[stream] hub disconnected: %v; reconnecting in %s", err, delay)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+			if delay < reconnectMaxDelay {
+				delay *= 2
+				if delay > reconnectMaxDelay {
+					delay = reconnectMaxDelay
+				}
+			}
+			continue
+		}
+		delay = reconnectBaseDelay
+	}
+}
+
+func (h *Hub) runSession(ctx context.Context) error {
+	if err := h.ensureConnected(ctx); err != nil {
+		return err
+	}
+	return h.run(ctx)
+}
+
+func (h *Hub) ensureConnected(ctx context.Context) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err := h.client.Connect(); err != nil {
+		if recreateErr := h.recreateClient(); recreateErr != nil {
+			return fmt.Errorf("connect stream hub: %w (recreate: %v)", err, recreateErr)
+		}
+		if err := h.client.Connect(); err != nil {
+			return fmt.Errorf("connect stream hub after recreate: %w", err)
+		}
+	}
+	return h.resubscribeAll()
+}
+
+func (h *Hub) recreateClient() error {
+	h.closeClient()
+
+	client, err := massivews.New(massivews.Config{
+		APIKey: h.apiKey,
+		Feed:   massivews.RealTime,
+		Market: massivews.Stocks,
+	})
+	if err != nil {
+		return err
+	}
+	h.client = client
+	return nil
+}
+
+func (h *Hub) closeClient() {
+	if h.client != nil {
+		h.client.Close()
+	}
+}
+
+func (h *Hub) resubscribeAll() error {
+	h.mu.RLock()
+	tickers := make([]string, 0, len(h.subs))
+	for ticker, count := range h.subs {
+		if count > 0 {
+			tickers = append(tickers, ticker)
+		}
+	}
+	h.mu.RUnlock()
+
+	for _, ticker := range tickers {
+		if err := h.client.Subscribe(massivews.StocksTrades, ticker); err != nil {
+			return fmt.Errorf("resubscribe trades for %s: %w", ticker, err)
+		}
+	}
+	return nil
 }
 
 func (h *Hub) run(ctx context.Context) error {

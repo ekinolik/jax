@@ -25,3 +25,14 @@ market_hours:
 
 monthly_expiry_weight: 1.0
 weekly_expiry_weight: 0.65
+
+# Massive REST retry (429 / 5xx) — tuned for t3.nano shared with node frontend
+api_retry:
+  max_retries: 5
+  base_delay_ms: 500
+
+# Rate-limit knobs — defaults balance API load vs freshness on 512MB RAM
+tuning:
+  greeks_interval_sec: 90       # min interval between greeks refreshes per active ticker
+  recompute_debounce_sec: 5     # batch spot ticks before full score + RSI recompute
+  max_rsi_calls_per_minute: 12  # global guard across active tickers (~1 per 5s debounce)

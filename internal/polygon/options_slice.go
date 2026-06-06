@@ -36,16 +36,23 @@ func (c *Client) GetOptionSlice(
 		ExpirationDateEQ: &exp,
 	}
 
-	iter := c.client.ListOptionsChainSnapshot(ctx, &params)
 	var snapshots []models.OptionContractSnapshot
-	for iter.Next() {
-		snapshots = append(snapshots, iter.Item())
-		if len(snapshots) > maxOptionContracts {
-			return nil, fmt.Errorf("option chain snapshot exceeded %d contracts", maxOptionContracts)
+	err = WithRetry(ctx, c.retry, func(callCtx context.Context) error {
+		iter := c.client.ListOptionsChainSnapshot(callCtx, &params)
+		snapshots = snapshots[:0]
+		for iter.Next() {
+			snapshots = append(snapshots, iter.Item())
+			if len(snapshots) > maxOptionContracts {
+				return fmt.Errorf("option chain snapshot exceeded %d contracts", maxOptionContracts)
+			}
 		}
-	}
-	if err := iter.Err(); err != nil {
-		return nil, fmt.Errorf("massive option chain snapshot error: %w", err)
+		if iterErr := iter.Err(); iterErr != nil {
+			return fmt.Errorf("massive option chain snapshot error: %w", iterErr)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	if monthlyWeight == 0 {

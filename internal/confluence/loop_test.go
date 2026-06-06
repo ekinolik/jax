@@ -96,6 +96,16 @@ func TestOnSubscribe_RTHSnapshot(t *testing.T) {
 	assert.Equal(t, pkgconfluence.MarketStatusOpen, got.MarketStatus)
 }
 
+func TestShouldPrefetchNow_skipsHoliday(t *testing.T) {
+	settings := testSettings(t)
+	p := NewProcessor(settings, testSectors(t), NewRegistry(5), nil, nil, nil)
+
+	loc, err := time.LoadLocation(settings.MarketHours.Timezone)
+	require.NoError(t, err)
+	july4 := time.Date(2024, 7, 4, 8, 0, 0, 0, loc)
+	assert.False(t, p.shouldPrefetchNow(july4))
+}
+
 func TestRegistryIdleTriggersDeactivate(t *testing.T) {
 	settings := testSettings(t)
 	registry := NewRegistry(settings.MaxActiveTickers)

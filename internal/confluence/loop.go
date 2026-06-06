@@ -15,8 +15,6 @@ import (
 
 const (
 	apiCallTimeout     = 30 * time.Second
-	recomputeDebounce  = 5 * time.Second
-	greeksInterval     = 90 * time.Second
 	greeksMaxInterval  = 5 * time.Minute
 	spotGreeksMovePct  = 0.005
 	idleGracePeriod    = 5 * time.Minute
@@ -143,7 +141,7 @@ func (p *Processor) scheduleDebouncedRecomputeLocked(ticker string, rt *tickerRu
 	if rt.debounceTimer != nil {
 		rt.debounceTimer.Stop()
 	}
-	rt.debounceTimer = time.AfterFunc(recomputeDebounce, func() {
+	rt.debounceTimer = time.AfterFunc(p.recomputeDebounce(), func() {
 		p.runRecompute(p.ctx, ticker)
 	})
 }
@@ -162,7 +160,7 @@ func (p *Processor) startGreeksTimer(ticker string) {
 	if rt.greeksTimer != nil {
 		rt.greeksTimer.Stop()
 	}
-	rt.greeksTimer = time.AfterFunc(greeksInterval, func() {
+	rt.greeksTimer = time.AfterFunc(p.greeksInterval(), func() {
 		if p.needsGreeksRefresh(ticker, 0) {
 			if err := p.refreshGreeks(p.ctx, ticker); err != nil {
 				log.Printf("[confluence] greeks refresh %s: %v", ticker, err)
@@ -208,7 +206,7 @@ func (p *Processor) needsGreeksRefresh(ticker string, spot float64) bool {
 	if elapsed >= greeksMaxInterval {
 		return true
 	}
-	if elapsed >= greeksInterval {
+	if elapsed >= p.greeksInterval() {
 		return true
 	}
 	if spot > 0 {
@@ -359,7 +357,7 @@ func (p *Processor) buildScoreInput(ctx context.Context, ticker string, now time
 		return pkgconfluence.ScoreInput{}, err
 	}
 
-	rsi, _, err := p.client.GetRSI(ctx, ticker, 14)
+	rsi, _, err := p.fetchRSI(ctx, ticker)
 	if err != nil {
 		return pkgconfluence.ScoreInput{}, fmt.Errorf("RSI: %w", err)
 	}
@@ -838,14 +836,15 @@ func (p *Processor) shouldPrefetchNow(now time.Time) bool {
 	if p.settings == nil {
 		return false
 	}
+	tradingDay, err := p.settings.IsTradingDay(now)
+	if err != nil || !tradingDay {
+		return false
+	}
 	loc, err := time.LoadLocation(p.settings.MarketHours.Timezone)
 	if err != nil {
 		return false
 	}
 	local := now.In(loc)
-	if local.Weekday() == time.Saturday || local.Weekday() == time.Sunday {
-		return false
-	}
 	prefetchTime := p.settings.OIPrefetchTime
 	if prefetchTime == "" {
 		prefetchTime = "08:00"

@@ -45,6 +45,35 @@ func TestSettingsIsRTH(t *testing.T) {
 	assert.False(t, saturdayOK)
 }
 
+func TestSettingsIsRTH_holidayClosed(t *testing.T) {
+	settings, err := confluence.LoadSettings("../../confluence-configs/settings.yaml")
+	require.NoError(t, err)
+
+	loc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	// Independence Day 2024 — NYSE closed
+	july4 := time.Date(2024, 7, 4, 11, 0, 0, 0, loc)
+	open, err := settings.IsRTH(july4)
+	require.NoError(t, err)
+	assert.False(t, open)
+
+	tradingDay, err := settings.IsTradingDay(july4)
+	require.NoError(t, err)
+	assert.False(t, tradingDay)
+}
+
+func TestSettingsTuningDefaults(t *testing.T) {
+	settings, err := confluence.LoadSettings("../../confluence-configs/settings.yaml")
+	require.NoError(t, err)
+
+	assert.Equal(t, 5, settings.APIRetry.MaxRetries)
+	assert.Equal(t, 500, settings.APIRetry.BaseDelayMs)
+	assert.Equal(t, 90, settings.Tuning.GreeksIntervalSec)
+	assert.Equal(t, 5, settings.Tuning.RecomputeDebounceSec)
+	assert.Equal(t, 12, settings.Tuning.MaxRSICallsPerMinute)
+}
+
 func TestLoadSICSectors(t *testing.T) {
 	sectors, err := confluence.LoadSICSectors("../../confluence-configs/sic_sectors.yaml")
 	require.NoError(t, err)

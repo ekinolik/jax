@@ -1,12 +1,13 @@
 module github.com/ekinolik/jax
 
-go 1.21
+go 1.23.0
 
 toolchain go1.24.2
 
 require (
 	github.com/joho/godotenv v1.5.1
 	github.com/massive-com/client-go/v2 v2.0.0
+	github.com/scmhub/calendar v0.0.0-20250305134741-bdfe49f3f914
 	github.com/stretchr/testify v1.11.0
 	google.golang.org/grpc v1.64.0
 	google.golang.org/protobuf v1.33.0

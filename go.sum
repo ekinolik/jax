@@ -31,6 +31,8 @@ github.com/massive-com/client-go/v2 v2.0.0 h1:hK6SzCIqJU0MlFyM0yXrBZWBmOhActftLO
 github.com/massive-com/client-go/v2 v2.0.0/go.mod h1:YL4vW5Zs8j8r44j3ErSTV9Hn9yw7VRkFGDUL0AKVIN8=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/scmhub/calendar v0.0.0-20250305134741-bdfe49f3f914 h1:7QkWcCekRtLvu31f2kxk2cbOZKxddt/2ho7dkobjFcs=
+github.com/scmhub/calendar v0.0.0-20250305134741-bdfe49f3f914/go.mod h1:CewzfNanIpn3kULhfnG7wJwWyrkTS2QuZri/f7yYVUk=
 github.com/sirupsen/logrus v1.9.3 h1:dueUQJ1C2q9oE3F7wvmSGAaVtTmUizReu6fjN8uqzbQ=
 github.com/sirupsen/logrus v1.9.3/go.mod h1:naHLuLoDiP4jHNo9R0sCBMtWGeIprob74mVsIT4qYEQ=
 github.com/stretchr/testify v1.11.0 h1:ib4sjIrwZKxE5u/Japgo/7SJV3PvgjGiRNAvTVGqQl8=

@@ -108,7 +108,7 @@ func (p *Processor) runBootstrapFetch(ctx context.Context, ticker string) (*pkgc
 		slices = append(slices, *slice)
 	}
 
-	rsi, _, err := p.client.GetRSI(ctx, ticker, 14)
+	rsi, _, err := p.fetchRSI(ctx, ticker)
 	if err != nil {
 		return nil, fmt.Errorf("RSI for %s: %w", ticker, err)
 	}
@@ -240,6 +240,11 @@ func latestTimestamp(times ...time.Time) time.Time {
 // bootstrapWatchlistIfClosed prefetches full snapshots for configured watchlist tickers on startup
 // when the market is closed so the first client request is warm.
 func (p *Processor) bootstrapWatchlistIfClosed() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[confluence] bootstrap watchlist panic: %v", r)
+		}
+	}()
 	if p.client == nil || p.settings == nil || p.isRTHNow() {
 		return
 	}

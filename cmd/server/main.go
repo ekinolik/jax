@@ -208,6 +208,7 @@ func startConfluence(cfg *config.Config) (*intconfluence.Processor, *stream.Hub,
 	client := polygon.NewClient(cfg)
 	registry := intconfluence.NewRegistry(settings.MaxActiveTickers)
 	processor := intconfluence.NewProcessor(settings, sectors, registry, oiCache, client, hub)
+	processor.ApplyClientRetryConfig(client)
 
 	ctx := context.Background()
 	if err := hub.Start(ctx); err != nil {

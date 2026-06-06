@@ -200,6 +200,30 @@ grpcurl \
 
 **Later phases:** jax-ov WebSocket gateway (Phase 4).
 
+### Phase 5 — Hardening & rate-limit tuning (t3.nano)
+
+Defaults in `confluence-configs/settings.yaml` are tuned for a **t3.nano** (512MB RAM, shared with the node.js frontend).
+
+| Knob | Default | Purpose |
+|------|---------|---------|
+| `api_retry.max_retries` | 5 | Exponential backoff retries on Massive 429/5xx (RSI, options chain, ticker overview, aggregates, last trade) |
+| `api_retry.base_delay_ms` | 500 | Initial retry delay (doubles each attempt) |
+| `tuning.greeks_interval_sec` | 90 | Minimum greeks refresh interval per active ticker |
+| `tuning.recompute_debounce_sec` | 5 | Debounce spot ticks before full score + RSI recompute |
+| `tuning.max_rsi_calls_per_minute` | 12 | Global RSI call guard (~1 per 5s debounce across tickers) |
+
+**Stream hub auto-reconnect:** `internal/stream/hub.go` runs a supervisor loop. On WebSocket disconnect it recreates the client, reconnects with exponential backoff (1s → 60s cap), and re-subscribes active tickers. Logs `[stream] hub disconnected: …; reconnecting in …`.
+
+**NYSE trading calendar:** RTH checks and OI prefetch use `github.com/scmhub/calendar` (XNYS). Weekends and market holidays (e.g. Independence Day) return `market_status: "closed"` and skip the 08:00 ET OI prefetch.
+
+**Deployment on t3.nano**
+
+1. Set `POLYGON_API_KEY` and `CONFLUENCE_CACHE_DIR=./cache/confluence`
+2. Limit active tickers via `max_active_tickers: 5` (hard cap on concurrent watches)
+3. If Massive rate limits persist, increase `recompute_debounce_sec` to 10 before slowing `greeks_interval_sec`
+4. Monitor logs for `[stream] hub disconnected` and `[confluence] greeks` / `RSI` errors after retries exhaust
+5. Start jax before jax-ov; see jax-ov README production checklist
+
 **LLM batch analysis:** [docs/confluence-llm-analysis.md](docs/confluence-llm-analysis.md) — field glossary, prompts, and ranking rubric for pasting Confluence JSON into Claude/OpenAI.
 
 ## Available Methods

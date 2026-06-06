@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/scmhub/calendar"
 	"gopkg.in/yaml.v3"
 )
 
@@ -19,15 +21,30 @@ type MarketHours struct {
 	Close    string `yaml:"close"`
 }
 
+// APIRetryConfig controls exponential backoff for Massive REST calls.
+type APIRetryConfig struct {
+	MaxRetries  int `yaml:"max_retries"`
+	BaseDelayMs int `yaml:"base_delay_ms"`
+}
+
+// TuningConfig holds rate-limit knobs tuned for t3.nano deployment.
+type TuningConfig struct {
+	GreeksIntervalSec      int `yaml:"greeks_interval_sec"`
+	RecomputeDebounceSec   int `yaml:"recompute_debounce_sec"`
+	MaxRSICallsPerMinute   int `yaml:"max_rsi_calls_per_minute"`
+}
+
 // Settings holds confluence engine configuration from settings.yaml.
 type Settings struct {
-	PrefetchWatchlist      []string    `yaml:"prefetch_watchlist"`
-	DualExpirationTickers  []string    `yaml:"dual_expiration_tickers"`
-	MaxActiveTickers       int         `yaml:"max_active_tickers"`
-	OIPrefetchTime         string      `yaml:"oi_prefetch_time"`
-	MarketHours            MarketHours `yaml:"market_hours"`
-	MonthlyExpiryWeight    float32     `yaml:"monthly_expiry_weight"`
-	WeeklyExpiryWeight     float32     `yaml:"weekly_expiry_weight"`
+	PrefetchWatchlist      []string         `yaml:"prefetch_watchlist"`
+	DualExpirationTickers  []string         `yaml:"dual_expiration_tickers"`
+	MaxActiveTickers       int              `yaml:"max_active_tickers"`
+	OIPrefetchTime         string           `yaml:"oi_prefetch_time"`
+	MarketHours            MarketHours      `yaml:"market_hours"`
+	MonthlyExpiryWeight    float32          `yaml:"monthly_expiry_weight"`
+	WeeklyExpiryWeight     float32          `yaml:"weekly_expiry_weight"`
+	APIRetry               APIRetryConfig   `yaml:"api_retry"`
+	Tuning                 TuningConfig     `yaml:"tuning"`
 }
 
 // SICSectorMapping maps SIC codes or descriptions to sector ETFs.
@@ -100,6 +117,49 @@ func (s *Settings) applyDefaults() {
 	if s.WeeklyExpiryWeight == 0 {
 		s.WeeklyExpiryWeight = DefaultWeeklyExpiryWeight
 	}
+	if s.APIRetry.MaxRetries == 0 {
+		s.APIRetry.MaxRetries = 5
+	}
+	if s.APIRetry.BaseDelayMs == 0 {
+		s.APIRetry.BaseDelayMs = 500
+	}
+	if s.Tuning.GreeksIntervalSec == 0 {
+		s.Tuning.GreeksIntervalSec = 90
+	}
+	if s.Tuning.RecomputeDebounceSec == 0 {
+		s.Tuning.RecomputeDebounceSec = 5
+	}
+	if s.Tuning.MaxRSICallsPerMinute == 0 {
+		s.Tuning.MaxRSICallsPerMinute = 12
+	}
+}
+
+var (
+	nyseCalendarMu sync.Mutex
+	nyseCalendar   *calendar.Calendar
+	nyseCalendarY  int
+)
+
+func nyseCalForYear(year int) *calendar.Calendar {
+	nyseCalendarMu.Lock()
+	defer nyseCalendarMu.Unlock()
+	if nyseCalendar != nil && (nyseCalendarY == year || nyseCalendarY == year-1) {
+		return nyseCalendar
+	}
+	nyseCalendar = calendar.XNYS(year, year+1)
+	nyseCalendarY = year
+	return nyseCalendar
+}
+
+// IsTradingDay reports whether the NYSE is open on the market-timezone calendar date of now.
+func (s *Settings) IsTradingDay(now time.Time) (bool, error) {
+	loc, err := time.LoadLocation(s.MarketHours.Timezone)
+	if err != nil {
+		return false, fmt.Errorf("load market timezone: %w", err)
+	}
+	local := now.In(loc)
+	cal := nyseCalForYear(local.Year())
+	return cal.IsBusinessDay(local), nil
 }
 
 // UsesDualExpiration reports whether ticker should fetch two expirations for OI.
@@ -113,18 +173,22 @@ func (s *Settings) UsesDualExpiration(ticker string) bool {
 	return false
 }
 
-// IsRTH reports whether now falls within configured regular trading hours on a weekday.
+// IsRTH reports whether now falls within configured regular trading hours on an NYSE trading day.
 func (s *Settings) IsRTH(now time.Time) (bool, error) {
+	tradingDay, err := s.IsTradingDay(now)
+	if err != nil {
+		return false, err
+	}
+	if !tradingDay {
+		return false, nil
+	}
+
 	loc, err := time.LoadLocation(s.MarketHours.Timezone)
 	if err != nil {
 		return false, fmt.Errorf("load market timezone: %w", err)
 	}
 
 	local := now.In(loc)
-	if local.Weekday() == time.Saturday || local.Weekday() == time.Sunday {
-		return false, nil
-	}
-
 	open, err := parseClock(local, s.MarketHours.Open)
 	if err != nil {
 		return false, err

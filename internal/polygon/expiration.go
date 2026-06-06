@@ -26,21 +26,27 @@ func (c *Client) listExpirationDates(ctx context.Context, ticker string) ([]time
 		WithExpired(expired).
 		WithLimit(limit)
 
-	iter := c.client.ListOptionsContracts(ctx, params)
-	seen := make(map[int64]struct{})
 	var dates []time.Time
-
-	for iter.Next() {
-		contract := iter.Item()
-		d := confluence.DateOnly(time.Time(contract.ExpirationDate))
-		if _, ok := seen[d.Unix()]; ok {
-			continue
+	err := WithRetry(ctx, c.retry, func(callCtx context.Context) error {
+		iter := c.client.ListOptionsContracts(callCtx, params)
+		seen := make(map[int64]struct{})
+		dates = dates[:0]
+		for iter.Next() {
+			contract := iter.Item()
+			d := confluence.DateOnly(time.Time(contract.ExpirationDate))
+			if _, ok := seen[d.Unix()]; ok {
+				continue
+			}
+			seen[d.Unix()] = struct{}{}
+			dates = append(dates, d)
 		}
-		seen[d.Unix()] = struct{}{}
-		dates = append(dates, d)
-	}
-	if err := iter.Err(); err != nil {
-		return nil, fmt.Errorf("massive list option contracts error: %w", err)
+		if iterErr := iter.Err(); iterErr != nil {
+			return fmt.Errorf("massive list option contracts error: %w", iterErr)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return dates, nil
 }

@@ -18,9 +18,17 @@ type TickerOverview struct {
 // GetTickerOverview fetches ticker reference details including SIC metadata.
 func (c *Client) GetTickerOverview(ctx context.Context, ticker string) (*TickerOverview, error) {
 	params := &models.GetTickerDetailsParams{Ticker: ticker}
-	res, err := c.client.GetTickerDetails(ctx, params)
+	var res *models.GetTickerDetailsResponse
+	err := WithRetry(ctx, c.retry, func(callCtx context.Context) error {
+		var callErr error
+		res, callErr = c.client.GetTickerDetails(callCtx, params)
+		if callErr != nil {
+			return fmt.Errorf("massive ticker overview API error: %w", callErr)
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("massive ticker overview API error: %w", err)
+		return nil, err
 	}
 
 	if res.Results.Ticker == "" {

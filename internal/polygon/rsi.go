@@ -26,9 +26,17 @@ func (c *Client) GetRSI(ctx context.Context, ticker string, window int) (float64
 		WithLimit(limit).
 		WithOrder(order)
 
-	res, err := c.client.GetRSI(ctx, params)
+	var res *models.GetRSIResponse
+	err := WithRetry(ctx, c.retry, func(callCtx context.Context) error {
+		var callErr error
+		res, callErr = c.client.GetRSI(callCtx, params)
+		if callErr != nil {
+			return fmt.Errorf("massive RSI API error: %w", callErr)
+		}
+		return nil
+	})
 	if err != nil {
-		return 0, time.Time{}, fmt.Errorf("massive RSI API error: %w", err)
+		return 0, time.Time{}, err
 	}
 	if len(res.Results.Values) == 0 {
 		return 0, time.Time{}, fmt.Errorf("no RSI values returned for %s", ticker)

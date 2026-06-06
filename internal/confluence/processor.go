@@ -43,6 +43,9 @@ type Processor struct {
 
 	bootstrapMu    sync.Mutex
 	bootstrapLocks map[string]*sync.Mutex
+
+	rsiCallsMu   sync.Mutex
+	rsiCallTimes []time.Time
 }
 
 // NewProcessor creates a confluence processor wired to settings and dependencies.
@@ -218,6 +221,11 @@ func dataAsOfFromScoreInput(in pkgconfluence.ScoreInput) time.Time {
 		latest = in.Now
 	}
 	return latest.UTC()
+}
+
+// ApplyClientRetryConfig wires Massive REST retry settings from confluence config.
+func (p *Processor) ApplyClientRetryConfig(client *polygon.Client) {
+	p.applyRetryConfig(client)
 }
 
 // OnUnsubscribe decrements registry ref-count for a ticker.
