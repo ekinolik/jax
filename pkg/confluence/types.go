@@ -325,4 +325,7 @@ type ConfluenceSnapshot struct {
 	ExitAction                 ExitAction
 	DistanceToExit             ExitTiming
 	UpsideBeyondResistancePct  float64
+
+	// Static entry playbook (when buy readiness warrants)
+	TradePlan *TradePlan
 }

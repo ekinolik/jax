@@ -236,5 +236,7 @@ func BuildSnapshot(in confluence.ScoreInput) confluence.ConfluenceSnapshot {
 	snap.DistanceToExit = sellResult.DistanceToExit
 	snap.UpsideBeyondResistancePct = sellResult.UpsideBeyondResPct
 
+	snap.TradePlan = confluence.BuildTradePlan(snap, settings.TradePlan)
+
 	return snap
 }

@@ -31,6 +31,7 @@ type ConfluenceSummary struct {
 	Reasons    []string  `json:"reasons"`
 	Warnings   []string  `json:"warnings"`
 	Gates      Gates     `json:"gates"`
+	TradePlan  *TradePlan `json:"trade_plan,omitempty"`
 }
 
 // Verdict holds buy and sell readiness summaries.
@@ -122,6 +123,7 @@ func SummaryFromSnapshot(snap ConfluenceSnapshot) ConfluenceSummary {
 		Reasons:    buildReasons(snap),
 		Warnings:   buildWarnings(snap),
 		Gates:      buildGates(snap),
+		TradePlan:  snap.TradePlan,
 	}
 }
 
@@ -269,6 +271,12 @@ func isSqueezeMomentumSetup(snap ConfluenceSnapshot) bool {
 func buildReasons(snap ConfluenceSnapshot) []string {
 	var reasons []string
 
+	if snap.TradePlan != nil {
+		if line := TradePlanReasonLine(snap.TradePlan); line != "" {
+			reasons = append(reasons, line)
+		}
+	}
+
 	if snap.StackedZone {
 		reasons = append(reasons, "Stacked support zone within 1% of spot")
 	}
@@ -330,6 +338,11 @@ func alignedSignalReason(name string) string {
 
 func buildWarnings(snap ConfluenceSnapshot) []string {
 	var warnings []string
+
+	if snap.TradePlan != nil && snap.TradePlan.ExitInsteadOfAddBelow > 0 &&
+		snap.Spot > 0 && snap.Spot < snap.TradePlan.ExitInsteadOfAddBelow {
+		warnings = append(warnings, "Spot below hard stop — do not add, consider exit")
+	}
 
 	if snap.Levels.HasNearestResistance && snap.UpsidePct > 0 && snap.UpsidePct < defaultMinUpsidePct {
 		warnings = append(warnings, "Upside room below 3% minimum — readiness capped")

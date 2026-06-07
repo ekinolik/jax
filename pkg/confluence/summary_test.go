@@ -165,6 +165,51 @@ func TestReadinessLabels(t *testing.T) {
 	}
 }
 
+func TestSummaryFromSnapshot_tradePlan(t *testing.T) {
+	plan := confluence.BuildTradePlan(confluence.ConfluenceSnapshot{
+		Ticker:          "NET",
+		Spot:            246.0,
+		ReadinessBand:   confluence.ReadinessPossibleEntry,
+		DistanceToEntry: confluence.EntryIdeal,
+		Levels: confluence.Levels{
+			Support: []confluence.Level{
+				{Price: 245.0, Source: confluence.LevelSourceGEX, Rank: 1},
+				{Price: 240.0, Source: confluence.LevelSourceDEX, Rank: 2},
+			},
+			NearestSupport:    245.0,
+			HasNearestSupport: true,
+		},
+	}, confluence.DefaultTradePlanConfig())
+	require.NotNil(t, plan)
+
+	snap := confluence.ConfluenceSnapshot{
+		Ticker:          "NET",
+		Spot:            246.0,
+		ReadinessBand:   confluence.ReadinessPossibleEntry,
+		DistanceToEntry: confluence.EntryIdeal,
+		TradePlan:       plan,
+		Levels: confluence.Levels{
+			NearestSupport:    245.0,
+			HasNearestSupport: true,
+		},
+	}
+
+	sum := confluence.SummaryFromSnapshot(snap)
+	require.NotNil(t, sum.TradePlan)
+	assert.InDelta(t, 245.0, sum.TradePlan.EntryZone.Price, 0.01)
+	require.NotEmpty(t, sum.Reasons)
+	assert.Contains(t, sum.Reasons[0], "Enter ~245")
+	assert.Contains(t, sum.Reasons[0], "hard exit 237.6")
+
+	snap.Spot = 235.0
+	sumBelow := confluence.SummaryFromSnapshot(snap)
+	assert.Contains(t, sumBelow.Warnings, "Spot below hard stop — do not add, consider exit")
+
+	b, err := json.Marshal(sum)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"trade_plan"`)
+}
+
 func TestSellReadinessLabels(t *testing.T) {
 	tests := []struct {
 		band  confluence.SellReadinessBand

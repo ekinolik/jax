@@ -62,3 +62,8 @@ scoring:
   neutral_gamma_band_pct: 0.003
   compound_squeeze_bonus: 10
   gamma_directional_buy_cap: -8
+
+# Entry playbook stop buffers (trade_plan on snapshot/summary)
+trade_plan:
+  gex_stop_buffer_pct: 0.005
+  dex_stop_buffer_pct: 0.010

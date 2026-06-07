@@ -67,6 +67,7 @@ func SnapshotToProto(snap *pkgconfluence.ConfluenceSnapshot) *confluencev1.Confl
 		ShortVolumeRatio:          snap.ShortVolumeRatio,
 		DaysToCover:               snap.DaysToCover,
 		FloatShares:               snap.FloatShares,
+		TradePlan:                 tradePlanToProto(snap.TradePlan),
 	}
 	if !snap.SpotTime.IsZero() {
 		out.SpotTimestamp = snap.SpotTime.Unix()
@@ -179,5 +180,48 @@ func SummaryToProto(sum pkgconfluence.ConfluenceSummary) *confluencev1.Confluenc
 			AdrOk:                     sum.Gates.ADROK,
 			BlockedFromHighConviction: sum.Gates.BlockedFromHighConviction,
 		},
+		TradePlan: tradePlanToProto(sum.TradePlan),
 	}
+}
+
+func tradePlanToProto(plan *pkgconfluence.TradePlan) *confluencev1.TradePlan {
+	if plan == nil {
+		return nil
+	}
+	out := &confluencev1.TradePlan{
+		EntryZone: &confluencev1.EntryZone{
+			Price:               plan.EntryZone.Price,
+			Source:              plan.EntryZone.Source,
+			Timing:              plan.EntryZone.Timing,
+			DistanceFromSpotPct: plan.EntryZone.DistanceFromSpotPct,
+			Note:                plan.EntryZone.Note,
+		},
+		ExitInsteadOfAddBelow: plan.ExitInsteadOfAddBelow,
+		IntradayNotes:         plan.IntradayNotes,
+		SpotContext: &confluencev1.SpotContext{
+			VsEntryZone: plan.SpotContext.VsEntryZone,
+			VsSoftStop:  plan.SpotContext.VsSoftStop,
+			VsHardStop:  plan.SpotContext.VsHardStop,
+			Guidance:    plan.SpotContext.Guidance,
+		},
+	}
+	for _, s := range plan.Stops {
+		out.Stops = append(out.Stops, &confluencev1.StopLevel{
+			Tier:   s.Tier,
+			Price:  s.Price,
+			Source: s.Source,
+			Rule:   s.Rule,
+			Action: s.Action,
+		})
+	}
+	for _, a := range plan.AverageDown {
+		out.AverageDown = append(out.AverageDown, &confluencev1.AddLevel{
+			Tier:      a.Tier,
+			Price:     a.Price,
+			SizeHint:  a.SizeHint,
+			Condition: a.Condition,
+			IfBelow:   a.IfBelow,
+		})
+	}
+	return out
 }

@@ -79,6 +79,22 @@ Proto JSON uses **snake_case**. This is the preferred format for LLM prompts.
 | `sector_etf` | string | Benchmark ETF (from SIC map, e.g. `SMH`) |
 | `stacked_zone` | bool | Two+ support levels within 1% of spot |
 | `data_as_of` | int64 | Unix seconds — latest spot/greeks/OI input |
+| `trade_plan` | object | Static entry playbook when `readiness` ≥ `caution` with buy setup (see below) |
+
+### `trade_plan` vs `sell_score`
+
+| Field | Purpose | When present |
+|-------|---------|--------------|
+| **`trade_plan`** | Pre-trade **entry playbook** at buy support: `entry_zone`, `stops` (soft → hard), `average_down`, `exit_instead_of_add_below`, `spot_context` | `possible_entry`, `high_conviction`, or `caution` (with note) |
+| **`sell_score`** | **Profit-taking / exit** at resistance for existing longs | Always computed; independent of entry playbook |
+
+**`trade_plan` is not live stop monitoring.** It does not track your entry price, ring buffers, or time-based exits. It answers: *if I enter at the signaled support, what levels below are stops vs average-down adds?*
+
+- **Noise (hold):** Wick below `soft_stop` but spot holds above `hard_stop` — prefer reclaim, not panic exit.
+- **Wrong (exit):** Meaningful break below `hard_stop` / `exit_instead_of_add_below` — exit; do not add.
+- **`intraday_notes`:** Advisory text only (lunch/close bounces, wick tolerance) — not auto-exit logic.
+
+Buffers are configurable in `confluence-configs/settings.yaml` (`trade_plan.gex_stop_buffer_pct`, `trade_plan.dex_stop_buffer_pct`).
 
 ### `confluence-test` CLI name mapping
 

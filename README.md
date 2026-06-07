@@ -146,10 +146,12 @@ Proto: `api/proto/confluence/v1/confluence.proto`
 | RPC | Description |
 |-----|-------------|
 | `GetConfluence` | Returns latest scored snapshot; bootstraps from Massive (up to 90s) when cache is empty or still loading |
-| `GetConfluenceSummary` | Returns human-readable summary projected from the latest snapshot (verdict, archetype, reasons, warnings, gates) |
+| `GetConfluenceSummary` | Returns human-readable summary projected from the latest snapshot (verdict, archetype, `trade_plan`, reasons, warnings, gates) |
 | `WatchConfluence` | Server-streaming updates when score or signal status changes (processor debounces duplicates); bootstraps before first push when needed |
 
-**Snapshot fields:** `ticker`, `timestamp`, `confluence_score`, `readiness`, `oi_status`, `market_status`, `signals` (gamma/delta/rsi/sector/market), `levels` (support/resistance ladder, `gamma_flip`), `daily_range_position`, `distance_to_entry`, `haptic_level`, `background_level`, plus `spot`, `rsi`, `sector_etf`, `stacked_zone`, `data_as_of`.
+**Snapshot fields:** `ticker`, `timestamp`, `confluence_score`, `readiness`, `oi_status`, `market_status`, `signals` (gamma/delta/rsi/sector/market), `levels` (support/resistance ladder, `gamma_flip`), `daily_range_position`, `distance_to_entry`, `haptic_level`, `background_level`, plus `spot`, `rsi`, `sector_etf`, `stacked_zone`, `data_as_of`, `sell_score`, and **`trade_plan`** (static entry playbook when buy readiness is `possible_entry`+ — entry zone, stops, average-down levels; not live stop monitoring).
+
+**`trade_plan` vs `sell_score`:** `trade_plan` is a pre-trade playbook anchored to buy support (soft/structure/hard stops and add levels below entry). `sell_score` is unchanged — resistance / profit-taking for long exits.
 
 **Local plaintext for jax-ov (Phase 4 prep)**
 

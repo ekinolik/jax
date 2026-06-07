@@ -50,6 +50,12 @@ type SignalWeights struct {
 	ShortSqueeze      float64 `yaml:"short_squeeze"`
 }
 
+// TradePlanConfig holds entry-playbook stop-buffer settings (see trade_plan.go).
+type TradePlanConfig struct {
+	GEXStopBufferPct float64 `yaml:"gex_stop_buffer_pct"`
+	DEXStopBufferPct float64 `yaml:"dex_stop_buffer_pct"`
+}
+
 // ScoringConfig holds v2 scoring thresholds and gates.
 type ScoringConfig struct {
 	MinUpsidePct            float64 `yaml:"min_upside_pct"`
@@ -76,6 +82,7 @@ type Settings struct {
 	Tuning                 TuningConfig     `yaml:"tuning"`
 	SignalWeights          SignalWeights    `yaml:"signal_weights"`
 	Scoring                ScoringConfig    `yaml:"scoring"`
+	TradePlan              TradePlanConfig  `yaml:"trade_plan"`
 }
 
 // SICSectorMapping maps SIC codes or descriptions to sector ETFs.
@@ -165,6 +172,23 @@ func (s *Settings) applyDefaults() {
 	}
 	s.SignalWeights.applyDefaults()
 	s.Scoring.applyDefaults()
+	s.TradePlan.applyDefaults()
+}
+
+func (c *TradePlanConfig) applyDefaults() {
+	if c.GEXStopBufferPct == 0 {
+		c.GEXStopBufferPct = 0.005
+	}
+	if c.DEXStopBufferPct == 0 {
+		c.DEXStopBufferPct = 0.010
+	}
+}
+
+// DefaultTradePlanConfig returns playbook buffer defaults.
+func DefaultTradePlanConfig() TradePlanConfig {
+	cfg := TradePlanConfig{}
+	cfg.applyDefaults()
+	return cfg
 }
 
 func (w *SignalWeights) applyDefaults() {
@@ -268,6 +292,7 @@ func EffectiveSettings(s *Settings) Settings {
 		out := Settings{}
 		out.SignalWeights = DefaultSignalWeights()
 		out.Scoring = DefaultScoringConfig()
+		out.TradePlan = DefaultTradePlanConfig()
 		return out
 	}
 	return *s
