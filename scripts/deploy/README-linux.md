@@ -24,7 +24,7 @@ make package-linux-amd64
 make package-all
 ```
 
-Quick one-off binaries land in `bin/`:
+Quick one-off dev binaries land in `bin/` with platform suffixes (for local multi-arch builds):
 
 - `bin/jax-linux-arm64`, `bin/confluence-test-linux-arm64`
 - `bin/jax-linux-amd64`, `bin/confluence-test-linux-amd64`
@@ -35,7 +35,7 @@ Each tarball extracts flat to the current directory (no wrapper folder) with arc
 
 | Path | Contents |
 |------|----------|
-| `bin/` | `jax-linux-<arch>` and `confluence-test-linux-<arch>` for that architecture only |
+| `bin/` | `jax` and `confluence-test` (no platform suffix; tarball is already arch-specific) |
 | `confluence-configs/` | `settings.yaml`, `sic_sectors.yaml` (Confluence processor defaults) |
 | `cache-configs/` | `example.yaml` (copy to `cache_tasks.yaml` on deploy) |
 | `scripts/` | Helper shell scripts (e.g. cert generation) |
@@ -49,26 +49,26 @@ Each tarball extracts flat to the current directory (no wrapper folder) with arc
 
 ## Deploy to t4g.nano (ARM64)
 
-1. Build on your dev machine: `make package-linux-arm64` (or `make build-linux-arm64` for binaries only).
-2. Copy the tarball or `bin/jax-linux-arm64` to the instance (e.g. `scp package/jax-*-linux-arm64.tar.gz ec2-user@host:~/`).
+1. Build on your dev machine: `make package-linux-arm64` (or `make build-linux-arm64` for dev binaries only).
+2. Copy the tarball to the instance (e.g. `scp package/jax-*-linux-arm64.tar.gz ec2-user@host:~/`).
 3. On the instance, extract and run the server binary:
 
    ```bash
    tar -xzf jax-*-linux-arm64.tar.gz
    cp .env.example .env   # edit POLYGON_API_KEY, ports, cache paths
-   ./bin/jax-linux-arm64
+   ./bin/jax
    ```
 
 4. Optional CLI smoke test (no server required):
 
    ```bash
    export POLYGON_API_KEY=your_key
-   ./bin/confluence-test-linux-arm64 --ticker NVDA
+   ./bin/confluence-test --ticker NVDA
    ```
 
 ## Deploy to t3.nano (AMD64)
 
-Same steps as t4g.nano, but use `make package-linux-amd64` / `bin/jax-linux-amd64`.
+Same steps as t4g.nano, but use `make package-linux-amd64`.
 
 ## Prerequisites
 

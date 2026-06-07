@@ -242,7 +242,7 @@ make package-linux-amd64
 make package-all
 ```
 
-Binaries: `bin/jax-linux-arm64` or `bin/jax-linux-amd64` (plus matching `confluence-test-*`). See [scripts/deploy/README-linux.md](scripts/deploy/README-linux.md) for deploy steps.
+Dev cross-compile binaries use suffixed names in `bin/` (e.g. `bin/jax-linux-arm64`); packaged tarballs contain `bin/jax` and `bin/confluence-test`. See [scripts/deploy/README-linux.md](scripts/deploy/README-linux.md) for deploy steps.
 
 1. Set `POLYGON_API_KEY` and `CONFLUENCE_CACHE_DIR=./cache/confluence`
 2. Limit active tickers via `max_active_tickers: 5` (hard cap on concurrent watches)
@@ -332,7 +332,9 @@ make package-linux-arm64  # versioned tarball in package/
 make package-all          # separate tarballs: linux amd64 + arm64, darwin arm64
 ```
 
-Each versioned tarball includes architecture-specific binaries under `bin/`, `confluence-configs/` (`settings.yaml`, `sic_sectors.yaml`), `cache-configs/`, scripts, `.env.example`, and related deploy files. See [scripts/deploy/README-linux.md](scripts/deploy/README-linux.md) for the full layout.
+Each versioned tarball includes `bin/jax` and `bin/confluence-test`, plus `confluence-configs/` (`settings.yaml`, `sic_sectors.yaml`), `cache-configs/`, scripts, `.env.example`, and related deploy files. See [scripts/deploy/README-linux.md](scripts/deploy/README-linux.md) for the full layout.
+
+Check the running package version with `./bin/jax --version` after extracting a tarball (or `bin/server --version` for local builds). The version matches the `VERSION` file in packaged releases (e.g. `jax 0.2.00005`).
 
 ## Running the Service
 

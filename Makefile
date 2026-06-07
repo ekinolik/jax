@@ -46,12 +46,13 @@ define build-package
 	mkdir -p $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/confluence-configs
 	cp confluence-configs/*.yaml $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/confluence-configs/
 
-	env $(GO_BUILD_ENV) GOOS=$(CURRENT_OS) GOARCH=$(CURRENT_ARCH) go build -v -o $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/bin/jax-$(CURRENT_OS)-$(CURRENT_ARCH) cmd/server/main.go
-	env $(GO_BUILD_ENV) GOOS=$(CURRENT_OS) GOARCH=$(CURRENT_ARCH) go build -v -o $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/bin/confluence-test-$(CURRENT_OS)-$(CURRENT_ARCH) ./cmd/confluence-test
+	env $(GO_BUILD_ENV) GOOS=$(CURRENT_OS) GOARCH=$(CURRENT_ARCH) go build -v $(VERSION_LDFLAGS) -o $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/bin/jax cmd/server/main.go
+	env $(GO_BUILD_ENV) GOOS=$(CURRENT_OS) GOARCH=$(CURRENT_ARCH) go build -v -o $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/bin/confluence-test ./cmd/confluence-test
 endef
 
 # Full version with build number
 FULL_VERSION = $(VERSION).$(BUILD_NUMBER)
+VERSION_LDFLAGS = -ldflags "-X github.com/ekinolik/jax/internal/version.Version=$(FULL_VERSION)"
 
 LINUX_AMD64_TARBALL = $(PACKAGE_DIR)/jax-$(FULL_VERSION)-linux-amd64.tar.gz
 LINUX_ARM64_TARBALL = $(PACKAGE_DIR)/jax-$(FULL_VERSION)-linux-arm64.tar.gz
@@ -69,7 +70,7 @@ proto:
 
 .PHONY: build
 build:
-	go build -o bin/server cmd/server/main.go
+	go build $(VERSION_LDFLAGS) -o bin/server cmd/server/main.go
 
 .PHONY: confluence-test
 confluence-test:
@@ -79,12 +80,12 @@ confluence-test:
 .PHONY: build-linux-amd64 build-linux-arm64 build-production build-production-arm64
 build-linux-amd64:
 	mkdir -p bin
-	env $(GO_BUILD_ENV) GOOS=linux GOARCH=amd64 go build -v -o bin/jax-linux-amd64 cmd/server/main.go
+	env $(GO_BUILD_ENV) GOOS=linux GOARCH=amd64 go build -v $(VERSION_LDFLAGS) -o bin/jax-linux-amd64 cmd/server/main.go
 	env $(GO_BUILD_ENV) GOOS=linux GOARCH=amd64 go build -v -o bin/confluence-test-linux-amd64 ./cmd/confluence-test
 
 build-linux-arm64:
 	mkdir -p bin
-	env $(GO_BUILD_ENV) GOOS=linux GOARCH=arm64 go build -v -o bin/jax-linux-arm64 cmd/server/main.go
+	env $(GO_BUILD_ENV) GOOS=linux GOARCH=arm64 go build -v $(VERSION_LDFLAGS) -o bin/jax-linux-arm64 cmd/server/main.go
 	env $(GO_BUILD_ENV) GOOS=linux GOARCH=arm64 go build -v -o bin/confluence-test-linux-arm64 ./cmd/confluence-test
 
 build-production: build-linux-amd64
@@ -93,12 +94,22 @@ build-production-arm64: build-linux-arm64
 
 .PHONY: package-production package-production-arm64
 package-production: build-production
+	rm -rf $(BUILD_DIR)/production-linux-amd64
+	mkdir -p $(BUILD_DIR)/production-linux-amd64/bin
+	cp bin/jax-linux-amd64 $(BUILD_DIR)/production-linux-amd64/bin/jax
+	cp bin/confluence-test-linux-amd64 $(BUILD_DIR)/production-linux-amd64/bin/confluence-test
+	cp -r scripts $(BUILD_DIR)/production-linux-amd64/
 	mkdir -p package
-	tar -zcf package/jax-linux-amd64.tar.gz bin/jax-linux-amd64 bin/confluence-test-linux-amd64 scripts/
+	tar -zcf package/jax-linux-amd64.tar.gz -C $(BUILD_DIR)/production-linux-amd64 .
 
 package-production-arm64: build-production-arm64
+	rm -rf $(BUILD_DIR)/production-linux-arm64
+	mkdir -p $(BUILD_DIR)/production-linux-arm64/bin
+	cp bin/jax-linux-arm64 $(BUILD_DIR)/production-linux-arm64/bin/jax
+	cp bin/confluence-test-linux-arm64 $(BUILD_DIR)/production-linux-arm64/bin/confluence-test
+	cp -r scripts $(BUILD_DIR)/production-linux-arm64/
 	mkdir -p package
-	tar -zcf package/jax-linux-arm64.tar.gz bin/jax-linux-arm64 bin/confluence-test-linux-arm64 scripts/
+	tar -zcf package/jax-linux-arm64.tar.gz -C $(BUILD_DIR)/production-linux-arm64 .
 
 .PHONY: run
 run:

@@ -26,6 +26,7 @@ import (
 	"github.com/ekinolik/jax/internal/scheduler"
 	"github.com/ekinolik/jax/internal/service"
 	"github.com/ekinolik/jax/internal/stream"
+	"github.com/ekinolik/jax/internal/version"
 	pkgconfluence "github.com/ekinolik/jax/pkg/confluence"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -228,6 +229,14 @@ func startConfluence(cfg *config.Config) (*intconfluence.Processor, *stream.Hub,
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--version", "-version":
+			fmt.Println(version.Line())
+			return
+		}
+	}
+
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
