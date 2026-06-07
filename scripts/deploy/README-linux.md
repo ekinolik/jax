@@ -31,6 +31,22 @@ Quick one-off binaries land in `bin/`:
 
 Versioned release tarballs land in `package/` (e.g. `jax-0.1.00001-linux-arm64.tar.gz`).
 
+Each tarball extracts flat to the current directory (no wrapper folder) with architecture-specific binaries only:
+
+| Path | Contents |
+|------|----------|
+| `bin/` | `jax-linux-<arch>` and `confluence-test-linux-<arch>` for that architecture only |
+| `confluence-configs/` | `settings.yaml`, `sic_sectors.yaml` (Confluence processor defaults) |
+| `cache-configs/` | `example.yaml` (copy to `cache_tasks.yaml` on deploy) |
+| `scripts/` | Helper shell scripts (e.g. cert generation) |
+| `certs/` | Empty placeholder; add TLS certs before production use |
+| `cache/` | Empty placeholder for runtime cache data |
+| `.env.example` | Environment variable template |
+| `README.md` | This deployment guide |
+| `VERSION` | Build version string |
+
+`make package-all` produces **separate** versioned tarballs per platform (linux-amd64, linux-arm64, darwin-arm64), not one combined archive.
+
 ## Deploy to t4g.nano (ARM64)
 
 1. Build on your dev machine: `make package-linux-arm64` (or `make build-linux-arm64` for binaries only).
@@ -39,7 +55,6 @@ Versioned release tarballs land in `package/` (e.g. `jax-0.1.00001-linux-arm64.t
 
    ```bash
    tar -xzf jax-*-linux-arm64.tar.gz
-   cd jax
    cp .env.example .env   # edit POLYGON_API_KEY, ports, cache paths
    ./bin/jax-linux-arm64
    ```

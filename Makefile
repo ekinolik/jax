@@ -28,22 +28,26 @@ define increment_build
 endef
 
 define build-package
-	mkdir -p $(BUILD_DIR)/$(CURRENT_OS)/bin
-	cp .env.example $(BUILD_DIR)/$(CURRENT_OS)/.env.example
-	echo "$(FULL_VERSION)" > $(BUILD_DIR)/$(CURRENT_OS)/VERSION
+	rm -rf $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)
+	mkdir -p $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/bin
+	cp .env.example $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/.env.example
+	echo "$(FULL_VERSION)" > $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/VERSION
 
-	mkdir -p $(BUILD_DIR)/$(CURRENT_OS)/certs
-	cp scripts/deploy/README-linux.md $(BUILD_DIR)/$(CURRENT_OS)/README.md
+	mkdir -p $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/certs
+	cp scripts/deploy/README-linux.md $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/README.md
 
-	mkdir -p $(BUILD_DIR)/$(CURRENT_OS)/scripts
-	cp scripts/*.sh $(BUILD_DIR)/$(CURRENT_OS)/scripts/
+	mkdir -p $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/scripts
+	cp scripts/*.sh $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/scripts/
 
-	mkdir -p $(BUILD_DIR)/$(CURRENT_OS)/cache
-	mkdir -p $(BUILD_DIR)/$(CURRENT_OS)/cache-configs
-	cp -r cache-configs/example.yaml $(BUILD_DIR)/$(CURRENT_OS)/cache-configs/
+	mkdir -p $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/cache
+	mkdir -p $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/cache-configs
+	cp -r cache-configs/example.yaml $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/cache-configs/
 
-	env $(GO_BUILD_ENV) GOOS=$(CURRENT_OS) GOARCH=$(CURRENT_ARCH) go build -v -o $(BUILD_DIR)/$(CURRENT_OS)/bin/jax-$(CURRENT_OS)-$(CURRENT_ARCH) cmd/server/main.go
-	env $(GO_BUILD_ENV) GOOS=$(CURRENT_OS) GOARCH=$(CURRENT_ARCH) go build -v -o $(BUILD_DIR)/$(CURRENT_OS)/bin/confluence-test-$(CURRENT_OS)-$(CURRENT_ARCH) ./cmd/confluence-test
+	mkdir -p $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/confluence-configs
+	cp confluence-configs/*.yaml $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/confluence-configs/
+
+	env $(GO_BUILD_ENV) GOOS=$(CURRENT_OS) GOARCH=$(CURRENT_ARCH) go build -v -o $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/bin/jax-$(CURRENT_OS)-$(CURRENT_ARCH) cmd/server/main.go
+	env $(GO_BUILD_ENV) GOOS=$(CURRENT_OS) GOARCH=$(CURRENT_ARCH) go build -v -o $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/bin/confluence-test-$(CURRENT_OS)-$(CURRENT_ARCH) ./cmd/confluence-test
 endef
 
 # Full version with build number
@@ -114,21 +118,21 @@ package-linux:
 	# Legacy alias — 32-bit x86 (386)
 	@echo "Creating Linux x86 (386) package..."
 	$(call build-package)
-	tar -zcf $(LINUX_TARBALL) -C $(BUILD_DIR) -s /^$(CURRENT_OS)/jax/ $(CURRENT_OS)
+	tar -zcf $(LINUX_TARBALL) -C $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH) .
 
 package-linux-amd64: CURRENT_OS = linux
 package-linux-amd64: CURRENT_ARCH = amd64
 package-linux-amd64:
 	@echo "Creating Linux AMD64 package (t3.nano)..."
 	$(call build-package)
-	tar -zcf $(LINUX_AMD64_TARBALL) -C $(BUILD_DIR) -s /^$(CURRENT_OS)/jax/ $(CURRENT_OS)
+	tar -zcf $(LINUX_AMD64_TARBALL) -C $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH) .
 
 package-linux-arm64: CURRENT_OS = linux
 package-linux-arm64: CURRENT_ARCH = arm64
 package-linux-arm64:
 	@echo "Creating Linux ARM64 package (t4g.nano)..."
 	$(call build-package)
-	tar -zcf $(LINUX_ARM64_TARBALL) -C $(BUILD_DIR) -s /^$(CURRENT_OS)/jax/ $(CURRENT_OS)
+	tar -zcf $(LINUX_ARM64_TARBALL) -C $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH) .
 
 .PHONY: package-mac
 package-mac: CURRENT_OS = darwin
@@ -136,7 +140,7 @@ package-mac: CURRENT_ARCH = arm64
 package-mac:
 	@echo "Creating Mac ARM64 package..."
 	$(call build-package)
-	tar -zcf $(DARWIN_TARBALL) -C $(BUILD_DIR) -s /^$(CURRENT_OS)/jax/ $(CURRENT_OS)
+	tar -zcf $(DARWIN_TARBALL) -C $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH) .
 
 .PHONY: finish-packaging
 finish-packaging:

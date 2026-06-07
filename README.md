@@ -329,10 +329,10 @@ Cross-compile Linux binaries for deployment (pure Go; no CGO):
 make build-linux-arm64    # t4g.nano (ARM64 Graviton2)
 make build-linux-amd64    # t3.nano (x86_64)
 make package-linux-arm64  # versioned tarball in package/
-make package-all          # amd64 + arm64 Linux + darwin arm64
+make package-all          # separate tarballs: linux amd64 + arm64, darwin arm64
 ```
 
-See [scripts/deploy/README-linux.md](scripts/deploy/README-linux.md) for full deploy instructions.
+Each versioned tarball includes architecture-specific binaries under `bin/`, `confluence-configs/` (`settings.yaml`, `sic_sectors.yaml`), `cache-configs/`, scripts, `.env.example`, and related deploy files. See [scripts/deploy/README-linux.md](scripts/deploy/README-linux.md) for the full layout.
 
 ## Running the Service
 
