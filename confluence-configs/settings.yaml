@@ -1,0 +1,71 @@
+# OI pre-fetched daily at 08:00 ET (before RTH)
+prefetch_watchlist:
+  - SPY
+  - QQQ
+  - SMH
+  - IGV
+  - IWM
+  - HACK
+  - MEME
+  - XLE
+  - XLI
+
+# SPY: fetch OI for two expirations (soonest + soonest weekly Friday)
+dual_expiration_tickers:
+  - SPY
+
+max_active_tickers: 5
+oi_prefetch_time: "08:00"
+
+# Regular trading hours only
+market_hours:
+  timezone: America/New_York
+  open: "09:30"
+  close: "16:00"
+
+monthly_expiry_weight: 1.0
+weekly_expiry_weight: 0.65
+
+# Massive REST retry (429 / 5xx) — tuned for t3.nano shared with node frontend
+api_retry:
+  max_retries: 5
+  base_delay_ms: 500
+
+# Rate-limit knobs — defaults balance API load vs freshness on 512MB RAM
+tuning:
+  greeks_interval_sec: 90       # min interval between greeks refreshes per active ticker
+  recompute_debounce_sec: 5     # batch spot ticks before full score + RSI recompute
+  max_rsi_calls_per_minute: 12  # global guard across active tickers (~1 per 5s debounce)
+
+# v2 buy signal weights (sum = 1.00); sector > market
+signal_weights:
+  gamma_support: 0.16
+  delta_support: 0.10
+  rsi_minute: 0.12
+  rsi_daily: 0.03
+  sector: 0.18
+  market: 0.08
+  upside: 0.07
+  downside: 0.03
+  adr: 0.05
+  gamma_environment: 0.04
+  gamma_directional: 0.06
+  short_squeeze: 0.08
+
+scoring:
+  min_upside_pct: 0.03
+  upside_great_pct: 0.06
+  adr_spike_ratio_warn: 1.4
+  adr_5d_spike_floor_pct: 4.0
+  adr_30d_spike_ceiling_pct: 3.0
+  min_risk_reward: 1.5
+  neutral_gamma_band_pct: 0.003
+  compound_squeeze_bonus: 10
+  gamma_directional_buy_cap: -8
+
+# Entry playbook stop buffers (trade_plan on snapshot/summary)
+trade_plan:
+  gex_stop_buffer_pct: 0.005
+  dex_stop_buffer_pct: 0.010
+  cluster_band_pct: 0.02
+  gex_dex_gap_warn_pct: 0.05

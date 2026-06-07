@@ -9,7 +9,7 @@ import (
 
 	"github.com/ekinolik/jax/internal/cache"
 	"github.com/ekinolik/jax/internal/config"
-	"github.com/polygon-io/client-go/rest/models"
+	"github.com/massive-com/client-go/v2/rest/models"
 )
 
 type CacheEntry struct {

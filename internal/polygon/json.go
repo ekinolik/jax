@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/polygon-io/client-go/rest/models"
+	"github.com/massive-com/client-go/v2/rest/models"
 )
 
 // SerializedData represents data with type information

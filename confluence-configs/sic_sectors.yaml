@@ -1,0 +1,16 @@
+# Match by sic_code (preferred) or sic_description substring
+mappings:
+  - sic_codes: ["3674", "3571", "3572"]
+    sector_etf: SMH
+  - sic_codes: ["7372", "7373"]
+    sector_etf: IGV
+  - sic_description_contains: "PETROLEUM"
+    sector_etf: XLE
+  - sic_description_contains: "INDUSTRIAL"
+    sector_etf: XLI
+  - sic_description_contains: "COMPUTER"
+    sector_etf: IGV
+  - sic_description_contains: "SEMICONDUCTOR"
+    sector_etf: SMH
+
+default_sector_etf: IWM

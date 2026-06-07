@@ -12,7 +12,7 @@ import (
 
 	"github.com/ekinolik/jax/internal/cache"
 	"github.com/ekinolik/jax/internal/polygon"
-	"github.com/polygon-io/client-go/rest/models"
+	"github.com/massive-com/client-go/v2/rest/models"
 	"gopkg.in/yaml.v3"
 )
 

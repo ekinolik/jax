@@ -56,11 +56,17 @@ proto:
 	protoc --go_out=. --go_opt=paths=source_relative \
 		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
 		api/proto/option/v1/option.proto \
-		api/proto/market/v1/market.proto
+		api/proto/market/v1/market.proto \
+		api/proto/confluence/v1/confluence.proto
 
 .PHONY: build
 build:
 	go build -o bin/server cmd/server/main.go
+
+.PHONY: confluence-test
+confluence-test:
+	mkdir -p bin
+	go build -o bin/confluence-test ./cmd/confluence-test
 
 .PHONY: build-production
 build-production:

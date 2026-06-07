@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/ekinolik/jax/internal/config"
-	polygon "github.com/polygon-io/client-go/rest"
-	"github.com/polygon-io/client-go/rest/iter"
-	"github.com/polygon-io/client-go/rest/models"
+	massive "github.com/massive-com/client-go/v2/rest"
+	"github.com/massive-com/client-go/v2/rest/iter"
+	"github.com/massive-com/client-go/v2/rest/models"
 )
 
 type Chain map[string]map[models.Date]map[string]models.OptionContractSnapshot
@@ -21,13 +21,20 @@ type PolygonAPI interface {
 }
 
 type Client struct {
-	client *polygon.Client
+	client *massive.Client
+	retry  RetryConfig
 }
 
 func NewClient(cfg *config.Config) *Client {
 	return &Client{
-		client: polygon.New(cfg.PolygonAPIKey),
+		client: massive.New(cfg.PolygonAPIKey),
+		retry:  DefaultRetryConfig(),
 	}
+}
+
+// SetRetryConfig configures exponential backoff for confluence REST calls.
+func (c *Client) SetRetryConfig(cfg RetryConfig) {
+	c.retry = cfg.normalized()
 }
 
 func (c *Client) GetOptionData(underlyingAsset string, startStrike, endStrike *float64) (float64, Chain, error) {
@@ -71,9 +78,17 @@ func (c *Client) GetOptionData(underlyingAsset string, startStrike, endStrike *f
 }
 
 func (c *Client) GetLastTrade(ctx context.Context, params *models.GetLastTradeParams) (*models.GetLastTradeResponse, error) {
-	res, err := c.client.GetLastTrade(ctx, params)
+	var res *models.GetLastTradeResponse
+	err := WithRetry(ctx, c.retry, func(callCtx context.Context) error {
+		var callErr error
+		res, callErr = c.client.GetLastTrade(callCtx, params)
+		if callErr != nil {
+			return fmt.Errorf("polygon API error: %w", callErr)
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("polygon API error: %w", err)
+		return nil, err
 	}
 	return res, nil
 }
@@ -88,16 +103,20 @@ func (c *Client) GetAggregates(ctx context.Context, ticker string, multiplier in
 		Adjusted:   &adjusted,
 	}
 
-	iter := c.client.ListAggs(ctx, params)
 	var aggs []models.Agg
-
-	for iter.Next() {
-		aggs = append(aggs, iter.Item())
+	err := WithRetry(ctx, c.retry, func(callCtx context.Context) error {
+		iter := c.client.ListAggs(callCtx, params)
+		aggs = aggs[:0]
+		for iter.Next() {
+			aggs = append(aggs, iter.Item())
+		}
+		if iterErr := iter.Err(); iterErr != nil {
+			return fmt.Errorf("polygon API aggregates error: %w", iterErr)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	if err := iter.Err(); err != nil {
-		return nil, fmt.Errorf("polygon API aggregates error: %w", err)
-	}
-
 	return aggs, nil
 }
