@@ -8,12 +8,16 @@ import (
 
 // TradePlan is a static entry playbook anchored to buy support at snapshot time.
 type TradePlan struct {
-	EntryZone             EntryZone   `json:"entry_zone"`
-	Stops                 []StopLevel `json:"stops"`
-	AverageDown           []AddLevel  `json:"average_down"`
-	ExitInsteadOfAddBelow float64     `json:"exit_instead_of_add_below,omitempty"`
-	SpotContext           SpotContext `json:"spot_context"`
-	IntradayNotes         []string    `json:"intraday_notes,omitempty"`
+	EntryZone                  EntryZone   `json:"entry_zone"`
+	Stops                      []StopLevel `json:"stops"`
+	AverageDown                []AddLevel  `json:"average_down"`
+	ExitInsteadOfAddBelow      float64     `json:"exit_instead_of_add_below,omitempty"`
+	SpotContext                SpotContext `json:"spot_context"`
+	IntradayNotes              []string    `json:"intraday_notes,omitempty"`
+	GEXDEXGapPct               float64     `json:"gex_dex_gap_pct,omitempty"`
+	TradeInvalidationPrice     float64     `json:"trade_invalidation_price,omitempty"`
+	StructureInvalidationPrice float64     `json:"structure_invalidation_price,omitempty"`
+	PrimaryExitPrice           float64     `json:"primary_exit_price,omitempty"`
 }
 
 // EntryZone identifies where buy/average-in is justified.
@@ -27,11 +31,13 @@ type EntryZone struct {
 
 // StopLevel is one ordered failure price below the entry anchor.
 type StopLevel struct {
-	Tier   string  `json:"tier"`
-	Price  float64 `json:"price"`
-	Source string  `json:"source"`
-	Rule   string  `json:"rule"`
-	Action string  `json:"action"`
+	Tier       string  `json:"tier"`
+	Price      float64 `json:"price"`
+	Source     string  `json:"source"`
+	Rule       string  `json:"rule"`
+	Action     string  `json:"action"`
+	HumanLabel string  `json:"label,omitempty"`
+	Meaning    string  `json:"meaning,omitempty"`
 }
 
 // AddLevel is a planned average-down price between anchor and hard stop.
@@ -51,9 +57,24 @@ type SpotContext struct {
 	Guidance    string `json:"guidance"`
 }
 
-var defaultIntradayNotes = []string{
-	"Brief pierce of soft stop may be noise — prefer reclaim over single tick",
-	"Lunch (12–1 ET) and last 15 min often see mean-reversion bounces",
+// ClusterFloor returns the lowest GEX support within bandPct below anchor.
+func ClusterFloor(levels Levels, anchor float64, bandPct float64) (float64, bool) {
+	if anchor <= 0 || bandPct <= 0 {
+		return 0, false
+	}
+	floor := anchor * (1 - bandPct)
+	var lowest float64
+	found := false
+	for _, lvl := range levels.Support {
+		if lvl.Source != LevelSourceGEX || lvl.Price >= anchor || lvl.Price < floor {
+			continue
+		}
+		if !found || lvl.Price < lowest {
+			lowest = lvl.Price
+			found = true
+		}
+	}
+	return lowest, found
 }
 
 // BuildTradePlan derives a static entry playbook when buy readiness warrants it.
@@ -74,8 +95,8 @@ func BuildTradePlan(snap ConfluenceSnapshot, cfg TradePlanConfig) *TradePlan {
 		return nil
 	}
 
-	stops, hardStop := buildTradeStops(snap, anchor, cfg)
-	adds, exitBelow := buildAverageDown(anchor, hardStop, source, snap.StackedZone, snap.Levels)
+	stops, hardStop, clusterFloor, useClusterFloor, gexDexGap := buildTradeStops(snap, anchor, cfg)
+	adds, exitBelow := buildAverageDown(anchor, hardStop, clusterFloor, useClusterFloor, source, snap.StackedZone, snap.Levels, cfg)
 
 	softPrice := stopPriceByTier(stops, "soft_stop")
 	spotCtx := buildSpotContext(snap.Spot, anchor, softPrice, hardStop, snap.ReadinessBand)
@@ -92,13 +113,69 @@ func BuildTradePlan(snap ConfluenceSnapshot, cfg TradePlanConfig) *TradePlan {
 		entry.Note = "setup not fully confirmed"
 	}
 
-	return &TradePlan{
+	plan := &TradePlan{
 		EntryZone:             entry,
 		Stops:                 stops,
 		AverageDown:           adds,
 		ExitInsteadOfAddBelow: exitBelow,
 		SpotContext:           spotCtx,
-		IntradayNotes:         append([]string(nil), defaultIntradayNotes...),
+		GEXDEXGapPct:          gexDexGap,
+	}
+	enrichTradePlanDisplay(plan)
+	return plan
+}
+
+// StopTierDisplay maps an internal stop tier to a human label and short meaning.
+func StopTierDisplay(tier string) (label, meaning string) {
+	switch tier {
+	case "soft_stop":
+		return "noise_line", "Wick tolerance — watch"
+	case "cluster_floor":
+		return "trade_failure", "Local GEX cluster lost — exit day trade"
+	case "structure_stop":
+		return "thesis_failure", "DEX structure lost — thesis invalid"
+	case "hard_stop":
+		return "emergency_stop", "Confirmed break below DEX"
+	case "final_stop":
+		return "emergency_stop", "Deepest backup"
+	case "stacked_stop":
+		return "stacked_stop", "Stacked zone support lost"
+	default:
+		return tier, ""
+	}
+}
+
+// StopTierTitleLabel returns a title-case label for invalidation summaries.
+func StopTierTitleLabel(tier string) string {
+	switch tier {
+	case "cluster_floor":
+		return "Trade failure"
+	case "structure_stop":
+		return "Thesis failure"
+	case "soft_stop":
+		return "Noise line"
+	case "hard_stop", "final_stop":
+		return "Emergency stop"
+	case "stacked_stop":
+		return "Stacked stop"
+	default:
+		return tier
+	}
+}
+
+func enrichTradePlanDisplay(plan *TradePlan) {
+	cluster := stopPriceByTier(plan.Stops, "cluster_floor")
+	structStop := stopPriceByTier(plan.Stops, "structure_stop")
+	plan.TradeInvalidationPrice = cluster
+	plan.StructureInvalidationPrice = structStop
+	switch {
+	case cluster > 0:
+		plan.PrimaryExitPrice = cluster
+	case structStop > 0:
+		plan.PrimaryExitPrice = structStop
+	}
+	for i := range plan.Stops {
+		plan.Stops[i].HumanLabel, plan.Stops[i].Meaning = StopTierDisplay(plan.Stops[i].Tier)
 	}
 }
 
@@ -179,9 +256,10 @@ func supportsBetween(levels Levels, high, low float64) []Level {
 	return out
 }
 
-func buildTradeStops(snap ConfluenceSnapshot, anchor float64, cfg TradePlanConfig) ([]StopLevel, float64) {
+func buildTradeStops(snap ConfluenceSnapshot, anchor float64, cfg TradePlanConfig) ([]StopLevel, float64, float64, bool, float64) {
 	var stops []StopLevel
 	var hardStop float64
+	var gexDexGap float64
 
 	softPrice := roundPrice(anchor * (1 - cfg.GEXStopBufferPct))
 	stops = append(stops, StopLevel{
@@ -192,7 +270,28 @@ func buildTradeStops(snap ConfluenceSnapshot, anchor float64, cfg TradePlanConfi
 		Action: "watch",
 	})
 
-	if dexLvl, ok := dexSupportBelowAnchor(snap.Levels, anchor); ok {
+	clusterFloor, hasCluster := ClusterFloor(snap.Levels, anchor, cfg.ClusterBandPct)
+	dexLvl, hasDEX := dexSupportBelowAnchor(snap.Levels, anchor)
+
+	useClusterFloor := false
+	if hasCluster && hasDEX {
+		gapToDEX := (clusterFloor - dexLvl.Price) / clusterFloor
+		if gapToDEX > cfg.ClusterDEXMinGapPct {
+			useClusterFloor = true
+			stops = append(stops, StopLevel{
+				Tier:   "cluster_floor",
+				Price:  clusterFloor,
+				Source: "gex",
+				Rule:   fmt.Sprintf("lowest GEX in %.0f%% band below anchor", cfg.ClusterBandPct*100),
+				Action: "exit_if_lost",
+			})
+		}
+	}
+
+	if hasDEX {
+		if gap := (anchor - dexLvl.Price) / anchor; gap >= cfg.GEXDEXGapWarnPct {
+			gexDexGap = gap
+		}
 		stops = append(stops, StopLevel{
 			Tier:   "structure_stop",
 			Price:  dexLvl.Price,
@@ -243,7 +342,7 @@ func buildTradeStops(snap ConfluenceSnapshot, anchor float64, cfg TradePlanConfi
 	sort.Slice(stops, func(i, j int) bool {
 		return stops[i].Price > stops[j].Price
 	})
-	return stops, hardStop
+	return stops, hardStop, clusterFloor, useClusterFloor, gexDexGap
 }
 
 func stopTierExists(stops []StopLevel, tier string, price float64) bool {
@@ -269,7 +368,7 @@ func dedupeStops(stops []StopLevel) []StopLevel {
 	return out
 }
 
-func buildAverageDown(anchor, hardStop float64, anchorSource string, stacked bool, levels Levels) ([]AddLevel, float64) {
+func buildAverageDown(anchor, hardStop, clusterFloor float64, useClusterFloor bool, anchorSource string, stacked bool, levels Levels, cfg TradePlanConfig) ([]AddLevel, float64) {
 	adds := []AddLevel{{
 		Tier:      "starter",
 		Price:     anchor,
@@ -278,18 +377,28 @@ func buildAverageDown(anchor, hardStop float64, anchorSource string, stacked boo
 	}}
 
 	exitBelow := hardStop
-	mid := supportsBetween(levels, anchor, hardStop)
-	if len(mid) >= 1 && hardStop > 0 {
+	addFloor := hardStop
+	if useClusterFloor && clusterFloor > 0 {
+		exitBelow = roundPrice(clusterFloor * (1 - cfg.GEXStopBufferPct))
+		addFloor = clusterFloor
+	}
+
+	mid := supportsBetween(levels, anchor, addFloor)
+	if len(mid) >= 1 && addFloor > 0 {
 		s := mid[0]
+		cond := fmt.Sprintf("Add only if still above exit level %.2f and reclaims %.0f", exitBelow, s.Price)
+		if useClusterFloor {
+			cond = fmt.Sprintf("Add only if cluster floor %.0f holds and reclaims %.0f", clusterFloor, s.Price)
+		}
 		adds = append(adds, AddLevel{
 			Tier:      "add_1",
 			Price:     s.Price,
 			SizeHint:  "small",
-			Condition: fmt.Sprintf("Add only if still above hard stop %.2f and reclaims %.0f", hardStop, anchor),
+			Condition: cond,
 			IfBelow:   "exit_instead",
 		})
 	}
-	if stacked && len(mid) >= 2 && hardStop > 0 {
+	if stacked && len(mid) >= 2 && addFloor > 0 {
 		s := mid[1]
 		adds = append(adds, AddLevel{
 			Tier:      "add_2",
@@ -323,6 +432,8 @@ func buildSpotContext(spot, anchor, softStop, hardStop float64, band ReadinessBa
 	switch {
 	case hardStop > 0 && spot < hardStop:
 		ctx.Guidance = "Below hard stop — playbook was for entry higher; do not add — consider exit"
+	case anchor > 0 && spot > 0 && (spot-anchor)/spot > 0.01:
+		ctx.Guidance = fmt.Sprintf("Above entry zone — wait for pullback toward %.0f", anchor)
 	case band == ReadinessCaution:
 		ctx.Guidance = "Near entry zone — playbook applies with caution; setup not fully confirmed"
 	case ctx.VsEntryZone == "at" || ctx.VsEntryZone == "above":
@@ -367,6 +478,8 @@ func TradePlanReasonLine(plan *TradePlan) string {
 	}
 	entry := plan.EntryZone.Price
 	soft := stopPriceByTier(plan.Stops, "soft_stop")
+	cluster := stopPriceByTier(plan.Stops, "cluster_floor")
+	structStop := stopPriceByTier(plan.Stops, "structure_stop")
 	hard := plan.ExitInsteadOfAddBelow
 
 	var addPrice float64
@@ -377,15 +490,40 @@ func TradePlanReasonLine(plan *TradePlan) string {
 		}
 	}
 
-	if hard > 0 && addPrice > 0 {
-		return fmt.Sprintf("Enter ~%.0f; soft stop %.1f; hard exit %.1f; add at %.0f only on reclaim",
-			entry, soft, hard, addPrice)
+	var line string
+	switch {
+	case cluster > 0 && structStop > 0:
+		line = fmt.Sprintf("Enter ~%.0f; exit day trade if cluster fails ~%.0f; thesis dead below %.0f (DEX)",
+			entry, cluster, structStop)
+	case structStop > 0:
+		line = fmt.Sprintf("Enter ~%.0f; thesis dead below %.0f (DEX)", entry, structStop)
+	case cluster > 0:
+		line = fmt.Sprintf("Enter ~%.0f; exit day trade if cluster fails ~%.0f", entry, cluster)
+	default:
+		line = fmt.Sprintf("Enter ~%.0f", entry)
 	}
-	if hard > 0 {
-		return fmt.Sprintf("Enter ~%.0f; soft stop %.1f; hard exit %.1f", entry, soft, hard)
+
+	if hard > 0 && cluster == 0 {
+		line += fmt.Sprintf("; emergency exit %.1f", hard)
+	} else if soft > 0 && cluster == 0 && structStop == 0 {
+		line += fmt.Sprintf("; watch noise below %.1f", soft)
 	}
-	if soft > 0 {
-		return fmt.Sprintf("Enter ~%.0f; soft stop %.1f", entry, soft)
+
+	if addPrice > 0 {
+		ref := cluster
+		if ref <= 0 {
+			ref = plan.ExitInsteadOfAddBelow
+		}
+		if ref <= 0 {
+			ref = hard
+		}
+		if ref > 0 {
+			if cluster > 0 {
+				line += fmt.Sprintf("; add at %.0f only if %.0f holds and reclaims %.0f", addPrice, ref, addPrice)
+			} else {
+				line += fmt.Sprintf("; add at %.0f only if %.1f holds and reclaims %.0f", addPrice, ref, addPrice)
+			}
+		}
 	}
-	return fmt.Sprintf("Enter ~%.0f", entry)
+	return line
 }

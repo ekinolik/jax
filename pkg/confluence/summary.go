@@ -2,6 +2,7 @@ package confluence
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"time"
 )
@@ -31,7 +32,43 @@ type ConfluenceSummary struct {
 	Reasons    []string  `json:"reasons"`
 	Warnings   []string  `json:"warnings"`
 	Gates      Gates     `json:"gates"`
-	TradePlan  *TradePlan `json:"trade_plan,omitempty"`
+	TradePlan  *SummaryTradePlan `json:"trade_plan,omitempty"`
+}
+
+// SummaryTradePlan is a human-enriched trade plan for summary JSON output.
+type SummaryTradePlan struct {
+	EntryZone                  EntryZone          `json:"entry_zone"`
+	Stops                      []StopLevel        `json:"stops"`
+	AverageDown                []AddLevel         `json:"average_down"`
+	ExitInsteadOfAddBelow      float64            `json:"exit_instead_of_add_below,omitempty"`
+	SpotContext                SpotContext        `json:"spot_context"`
+	IntradayNotes              []string           `json:"intraday_notes,omitempty"`
+	GEXDEXGapPct               float64            `json:"gex_dex_gap_pct,omitempty"`
+	TradeInvalidationPrice     float64            `json:"trade_invalidation_price,omitempty"`
+	StructureInvalidationPrice float64            `json:"structure_invalidation_price,omitempty"`
+	PrimaryExitPrice           float64            `json:"primary_exit_price,omitempty"`
+	Invalidation               *PlanInvalidation  `json:"invalidation,omitempty"`
+	PrimaryExit                *PlanPrimaryExit   `json:"primary_exit,omitempty"`
+}
+
+// PlanInvalidation distinguishes day-trade vs thesis invalidation levels.
+type PlanInvalidation struct {
+	Trade     *InvalidationPoint `json:"trade,omitempty"`
+	Structure *InvalidationPoint `json:"structure,omitempty"`
+}
+
+// InvalidationPoint is one actionable invalidation price with human labels.
+type InvalidationPoint struct {
+	Price   float64 `json:"price"`
+	Label   string  `json:"label"`
+	Meaning string  `json:"meaning"`
+}
+
+// PlanPrimaryExit highlights the first meaningful exit for mean-reversion setups.
+type PlanPrimaryExit struct {
+	Price    float64 `json:"price"`
+	Label    string  `json:"label"`
+	Emphasis bool    `json:"emphasis"`
 }
 
 // Verdict holds buy and sell readiness summaries.
@@ -123,7 +160,76 @@ func SummaryFromSnapshot(snap ConfluenceSnapshot) ConfluenceSummary {
 		Reasons:    buildReasons(snap),
 		Warnings:   buildWarnings(snap),
 		Gates:      buildGates(snap),
-		TradePlan:  snap.TradePlan,
+		TradePlan:  buildSummaryTradePlan(snap.TradePlan),
+	}
+}
+
+func buildSummaryTradePlan(plan *TradePlan) *SummaryTradePlan {
+	if plan == nil {
+		return nil
+	}
+	out := &SummaryTradePlan{
+		EntryZone:                  plan.EntryZone,
+		Stops:                      plan.Stops,
+		AverageDown:                plan.AverageDown,
+		ExitInsteadOfAddBelow:      plan.ExitInsteadOfAddBelow,
+		SpotContext:                plan.SpotContext,
+		IntradayNotes:              plan.IntradayNotes,
+		GEXDEXGapPct:               plan.GEXDEXGapPct,
+		TradeInvalidationPrice:     plan.TradeInvalidationPrice,
+		StructureInvalidationPrice: plan.StructureInvalidationPrice,
+		PrimaryExitPrice:           plan.PrimaryExitPrice,
+	}
+
+	var inv PlanInvalidation
+	if plan.TradeInvalidationPrice > 0 {
+		inv.Trade = &InvalidationPoint{
+			Price:   plan.TradeInvalidationPrice,
+			Label:   StopTierTitleLabel("cluster_floor"),
+			Meaning: "GEX cluster lost — exit day trade",
+		}
+	}
+	if plan.StructureInvalidationPrice > 0 {
+		inv.Structure = &InvalidationPoint{
+			Price:   plan.StructureInvalidationPrice,
+			Label:   StopTierTitleLabel("structure_stop"),
+			Meaning: "DEX support lost — full thesis invalid",
+		}
+	}
+	if inv.Trade != nil || inv.Structure != nil {
+		out.Invalidation = &inv
+	}
+
+	if plan.PrimaryExitPrice > 0 {
+		label := StopTierTitleLabel("structure_stop")
+		if plan.TradeInvalidationPrice > 0 {
+			label = StopTierTitleLabel("cluster_floor")
+		}
+		out.PrimaryExit = &PlanPrimaryExit{
+			Price:    plan.PrimaryExitPrice,
+			Label:    label,
+			Emphasis: true,
+		}
+	}
+	return out
+}
+
+// BasePlan returns the underlying trade plan fields without summary-only enrichment.
+func (s *SummaryTradePlan) BasePlan() *TradePlan {
+	if s == nil {
+		return nil
+	}
+	return &TradePlan{
+		EntryZone:                  s.EntryZone,
+		Stops:                      s.Stops,
+		AverageDown:                s.AverageDown,
+		ExitInsteadOfAddBelow:      s.ExitInsteadOfAddBelow,
+		SpotContext:                s.SpotContext,
+		IntradayNotes:              s.IntradayNotes,
+		GEXDEXGapPct:               s.GEXDEXGapPct,
+		TradeInvalidationPrice:     s.TradeInvalidationPrice,
+		StructureInvalidationPrice: s.StructureInvalidationPrice,
+		PrimaryExitPrice:           s.PrimaryExitPrice,
 	}
 }
 
@@ -297,6 +403,9 @@ func buildReasons(snap ConfluenceSnapshot) []string {
 		if sig.Status != SignalAligned {
 			continue
 		}
+		if sig.Name == "upside" && snap.RiskReward > 0 && snap.RiskReward < 1 {
+			continue
+		}
 		if msg := alignedSignalReason(sig.Name); msg != "" {
 			reasons = appendUnique(reasons, msg)
 		}
@@ -342,6 +451,23 @@ func buildWarnings(snap ConfluenceSnapshot) []string {
 	if snap.TradePlan != nil && snap.TradePlan.ExitInsteadOfAddBelow > 0 &&
 		snap.Spot > 0 && snap.Spot < snap.TradePlan.ExitInsteadOfAddBelow {
 		warnings = append(warnings, "Spot below hard stop — do not add, consider exit")
+	}
+
+	if snap.TradePlan != nil && snap.TradePlan.GEXDEXGapPct > 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"Large air pocket (%.0f%%) from entry anchor to DEX structure stop — cluster floor is first meaningful exit",
+			snap.TradePlan.GEXDEXGapPct*100))
+	}
+
+	downsideAgainst := false
+	for _, sig := range buySignals(snap) {
+		if sig.Name == "downside" && sig.Status == SignalAgainst {
+			downsideAgainst = true
+			break
+		}
+	}
+	if (snap.RiskReward > 0 && snap.RiskReward < 1) || downsideAgainst {
+		warnings = appendUnique(warnings, "Poor risk/reward — downside exceeds upside")
 	}
 
 	if snap.Levels.HasNearestResistance && snap.UpsidePct > 0 && snap.UpsidePct < defaultMinUpsidePct {

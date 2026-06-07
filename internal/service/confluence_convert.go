@@ -180,7 +180,40 @@ func SummaryToProto(sum pkgconfluence.ConfluenceSummary) *confluencev1.Confluenc
 			AdrOk:                     sum.Gates.ADROK,
 			BlockedFromHighConviction: sum.Gates.BlockedFromHighConviction,
 		},
-		TradePlan: tradePlanToProto(sum.TradePlan),
+		TradePlan: summaryTradePlanToProto(sum.TradePlan),
+	}
+}
+
+func summaryTradePlanToProto(plan *pkgconfluence.SummaryTradePlan) *confluencev1.TradePlan {
+	if plan == nil {
+		return nil
+	}
+	out := tradePlanToProto(plan.BasePlan())
+	if plan.Invalidation != nil {
+		inv := &confluencev1.PlanInvalidation{}
+		if plan.Invalidation.Trade != nil {
+			inv.Trade = invalidationPointToProto(*plan.Invalidation.Trade)
+		}
+		if plan.Invalidation.Structure != nil {
+			inv.Structure = invalidationPointToProto(*plan.Invalidation.Structure)
+		}
+		out.Invalidation = inv
+	}
+	if plan.PrimaryExit != nil {
+		out.PrimaryExit = &confluencev1.PlanPrimaryExit{
+			Price:    plan.PrimaryExit.Price,
+			Label:    plan.PrimaryExit.Label,
+			Emphasis: plan.PrimaryExit.Emphasis,
+		}
+	}
+	return out
+}
+
+func invalidationPointToProto(pt pkgconfluence.InvalidationPoint) *confluencev1.InvalidationPoint {
+	return &confluencev1.InvalidationPoint{
+		Price:   pt.Price,
+		Label:   pt.Label,
+		Meaning: pt.Meaning,
 	}
 }
 
@@ -196,8 +229,12 @@ func tradePlanToProto(plan *pkgconfluence.TradePlan) *confluencev1.TradePlan {
 			DistanceFromSpotPct: plan.EntryZone.DistanceFromSpotPct,
 			Note:                plan.EntryZone.Note,
 		},
-		ExitInsteadOfAddBelow: plan.ExitInsteadOfAddBelow,
-		IntradayNotes:         plan.IntradayNotes,
+		ExitInsteadOfAddBelow:      plan.ExitInsteadOfAddBelow,
+		GexDexGapPct:                 plan.GEXDEXGapPct,
+		IntradayNotes:                plan.IntradayNotes,
+		TradeInvalidationPrice:       plan.TradeInvalidationPrice,
+		StructureInvalidationPrice:   plan.StructureInvalidationPrice,
+		PrimaryExitPrice:             plan.PrimaryExitPrice,
 		SpotContext: &confluencev1.SpotContext{
 			VsEntryZone: plan.SpotContext.VsEntryZone,
 			VsSoftStop:  plan.SpotContext.VsSoftStop,
@@ -207,11 +244,13 @@ func tradePlanToProto(plan *pkgconfluence.TradePlan) *confluencev1.TradePlan {
 	}
 	for _, s := range plan.Stops {
 		out.Stops = append(out.Stops, &confluencev1.StopLevel{
-			Tier:   s.Tier,
-			Price:  s.Price,
-			Source: s.Source,
-			Rule:   s.Rule,
-			Action: s.Action,
+			Tier:    s.Tier,
+			Price:   s.Price,
+			Source:  s.Source,
+			Rule:    s.Rule,
+			Action:  s.Action,
+			Label:   s.HumanLabel,
+			Meaning: s.Meaning,
 		})
 	}
 	for _, a := range plan.AverageDown {

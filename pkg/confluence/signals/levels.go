@@ -473,7 +473,15 @@ func TradeGeometry(spot float64, levels confluence.Levels) confluence.TradeGeome
 	}
 
 	var stopPrice float64
-	if s2, ok := SecondSupport(levels); ok && s2.Price < spot {
+	if gex, ok := Rank1GEXSupport(levels); ok && gex.Price < spot {
+		if cf, ok := confluence.ClusterFloor(levels, gex.Price, 0.02); ok {
+			stopPrice = cf
+			geo.HasDownside = true
+		} else if s2, ok := SecondSupport(levels); ok && s2.Price < spot {
+			stopPrice = s2.Price
+			geo.HasDownside = true
+		}
+	} else if s2, ok := SecondSupport(levels); ok && s2.Price < spot {
 		stopPrice = s2.Price
 		geo.HasDownside = true
 	} else if levels.GammaFlip > 0 && levels.GammaFlip < spot {

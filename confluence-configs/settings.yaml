@@ -67,3 +67,5 @@ scoring:
 trade_plan:
   gex_stop_buffer_pct: 0.005
   dex_stop_buffer_pct: 0.010
+  cluster_band_pct: 0.02
+  gex_dex_gap_warn_pct: 0.05

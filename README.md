@@ -153,6 +153,8 @@ Proto: `api/proto/confluence/v1/confluence.proto`
 
 **`trade_plan` vs `sell_score`:** `trade_plan` is a pre-trade playbook anchored to buy support (soft/structure/hard stops and add levels below entry). `sell_score` is unchanged — resistance / profit-taking for long exits.
 
+**`trade_plan` human labels (v2.1):** Stops include `label` / `meaning` (e.g. `trade_failure`, `thesis_failure`). Summary and snapshot protos also expose `trade_invalidation_price`, `structure_invalidation_price`, `primary_exit_price`, `invalidation` (`trade` / `structure`), and `primary_exit` (emphasis on cluster floor when present). `confluence-test --summary` emits the same fields with snake_case JSON keys.
+
 **Local plaintext for jax-ov (Phase 4 prep)**
 
 Production uses **mTLS** on port 50051 (see [Security](#security)). For local development and jax-ov on the same host, enable plaintext gRPC:

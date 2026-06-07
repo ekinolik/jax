@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	confluencev1 "github.com/ekinolik/jax/api/proto/confluence/v1"
 	pkgconfluence "github.com/ekinolik/jax/pkg/confluence"
 )
 
@@ -149,6 +150,108 @@ func TestSnapshotToProto_v2Fields(t *testing.T) {
 func TestSnapshotToProto_nil(t *testing.T) {
 	if SnapshotToProto(nil) != nil {
 		t.Error("expected nil for nil input")
+	}
+}
+
+func TestSummaryToProto_enrichedTradePlan(t *testing.T) {
+	plan := pkgconfluence.BuildTradePlan(crwdStyleSnapshotForConvert(), pkgconfluence.DefaultTradePlanConfig())
+	if plan == nil {
+		t.Fatal("expected trade plan")
+	}
+
+	sum := pkgconfluence.SummaryFromSnapshot(pkgconfluence.ConfluenceSnapshot{
+		Ticker:        "CRWD",
+		Spot:          665.0,
+		MarketStatus:  pkgconfluence.MarketStatusOpen,
+		ReadinessBand: pkgconfluence.ReadinessPossibleEntry,
+		TradePlan:     plan,
+	})
+
+	proto := SummaryToProto(sum)
+	if proto.TradePlan == nil {
+		t.Fatal("expected trade_plan on summary proto")
+	}
+	tp := proto.TradePlan
+
+	if tp.TradeInvalidationPrice != 640 || tp.StructureInvalidationPrice != 590 || tp.PrimaryExitPrice != 640 {
+		t.Errorf("invalidation prices: trade=%v structure=%v primary=%v",
+			tp.TradeInvalidationPrice, tp.StructureInvalidationPrice, tp.PrimaryExitPrice)
+	}
+	if tp.Invalidation == nil || tp.Invalidation.Trade == nil || tp.Invalidation.Structure == nil {
+		t.Fatalf("invalidation: %+v", tp.Invalidation)
+	}
+	if tp.Invalidation.Trade.Label != "Trade failure" || tp.Invalidation.Structure.Label != "Thesis failure" {
+		t.Errorf("invalidation labels: trade=%q structure=%q",
+			tp.Invalidation.Trade.Label, tp.Invalidation.Structure.Label)
+	}
+	if tp.PrimaryExit == nil || tp.PrimaryExit.Label != "Trade failure" || !tp.PrimaryExit.Emphasis {
+		t.Errorf("primary_exit: %+v", tp.PrimaryExit)
+	}
+
+	var cluster *confluencev1.StopLevel
+	for _, s := range tp.Stops {
+		if s.Tier == "cluster_floor" {
+			cluster = s
+			break
+		}
+	}
+	if cluster == nil {
+		t.Fatal("expected cluster_floor stop")
+	}
+	if cluster.Label != "trade_failure" {
+		t.Errorf("cluster label: got %q want trade_failure", cluster.Label)
+	}
+	if cluster.Meaning == "" {
+		t.Error("expected cluster meaning")
+	}
+}
+
+func crwdStyleSnapshotForConvert() pkgconfluence.ConfluenceSnapshot {
+	return pkgconfluence.ConfluenceSnapshot{
+		Ticker:          "CRWD",
+		Spot:            665.0,
+		ReadinessBand:   pkgconfluence.ReadinessPossibleEntry,
+		DistanceToEntry: pkgconfluence.EntryEarly,
+		Levels: pkgconfluence.Levels{
+			Support: []pkgconfluence.Level{
+				{Price: 650.0, Source: pkgconfluence.LevelSourceGEX, Rank: 1},
+				{Price: 645.0, Source: pkgconfluence.LevelSourceGEX, Rank: 2},
+				{Price: 640.0, Source: pkgconfluence.LevelSourceGEX, Rank: 3},
+				{Price: 590.0, Source: pkgconfluence.LevelSourceDEX, Rank: 4},
+			},
+			NearestSupport:    650.0,
+			HasNearestSupport: true,
+		},
+	}
+}
+
+func TestSnapshotToProto_tradePlanLabels(t *testing.T) {
+	plan := pkgconfluence.BuildTradePlan(crwdStyleSnapshotForConvert(), pkgconfluence.DefaultTradePlanConfig())
+	if plan == nil {
+		t.Fatal("expected trade plan")
+	}
+
+	proto := SnapshotToProto(&pkgconfluence.ConfluenceSnapshot{
+		Ticker:        "CRWD",
+		Spot:          665.0,
+		ReadinessBand: pkgconfluence.ReadinessPossibleEntry,
+		TradePlan:     plan,
+	})
+	if proto.TradePlan == nil {
+		t.Fatal("expected trade_plan on snapshot proto")
+	}
+	if proto.TradePlan.TradeInvalidationPrice != 640 {
+		t.Errorf("trade_invalidation_price: got %v", proto.TradePlan.TradeInvalidationPrice)
+	}
+	var cluster *confluencev1.StopLevel
+	for _, s := range proto.TradePlan.Stops {
+		if s.Tier == "cluster_floor" {
+			cluster = s
+			break
+		}
+	}
+	if cluster == nil || cluster.Label != "trade_failure" {
+		t.Errorf("cluster stop: %+v", cluster)
 	}
 }
 

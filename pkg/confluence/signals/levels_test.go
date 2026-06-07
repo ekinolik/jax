@@ -95,6 +95,24 @@ func TestRank1Resistance_andSecondSupport(t *testing.T) {
 	assert.Equal(t, 96.0, s2.Price)
 }
 
+func TestTradeGeometry_clusterFloorStop(t *testing.T) {
+	spot := 665.0
+	levels := confluence.Levels{
+		Support: []confluence.Level{
+			{Price: 650, Source: confluence.LevelSourceGEX, Rank: 1},
+			{Price: 645, Source: confluence.LevelSourceGEX, Rank: 2},
+			{Price: 640, Source: confluence.LevelSourceGEX, Rank: 3},
+			{Price: 590, Source: confluence.LevelSourceDEX, Rank: 4},
+		},
+		Resistance: []confluence.Level{{Price: 680, Rank: 1}},
+	}
+	geo := signals.TradeGeometry(spot, levels)
+	assert.True(t, geo.HasDownside)
+	assert.InDelta(t, 640.0, geo.StopSupport, 0.01)
+	assert.InDelta(t, (spot-640)/spot, geo.DownsidePct, 0.001)
+	assert.Less(t, geo.RiskReward, 1.0)
+}
+
 func TestTradeGeometry_upsideDownside(t *testing.T) {
 	spot := 100.0
 	levels := confluence.Levels{

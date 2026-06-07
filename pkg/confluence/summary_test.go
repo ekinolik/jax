@@ -2,6 +2,7 @@ package confluence_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -199,7 +200,9 @@ func TestSummaryFromSnapshot_tradePlan(t *testing.T) {
 	assert.InDelta(t, 245.0, sum.TradePlan.EntryZone.Price, 0.01)
 	require.NotEmpty(t, sum.Reasons)
 	assert.Contains(t, sum.Reasons[0], "Enter ~245")
-	assert.Contains(t, sum.Reasons[0], "hard exit 237.6")
+	assert.Contains(t, sum.Reasons[0], "thesis dead below 240 (DEX)")
+	assert.Contains(t, sum.Reasons[0], "emergency exit 237.6")
+	assert.Contains(t, sum.Reasons[0], "add at 240 only if 237.6 holds and reclaims 240")
 
 	snap.Spot = 235.0
 	sumBelow := confluence.SummaryFromSnapshot(snap)
@@ -208,6 +211,129 @@ func TestSummaryFromSnapshot_tradePlan(t *testing.T) {
 	b, err := json.Marshal(sum)
 	require.NoError(t, err)
 	assert.Contains(t, string(b), `"trade_plan"`)
+	assert.Contains(t, string(b), `"thesis_failure"`)
+}
+
+func TestSummaryFromSnapshot_CRWDHumanLabels(t *testing.T) {
+	plan := confluence.BuildTradePlan(crwdStyleSnapshotForSummary(), confluence.DefaultTradePlanConfig())
+	require.NotNil(t, plan)
+
+	snap := confluence.ConfluenceSnapshot{
+		Ticker:        "CRWD",
+		Spot:          665.0,
+		MarketStatus:  confluence.MarketStatusOpen,
+		ReadinessBand: confluence.ReadinessPossibleEntry,
+		TradePlan:     plan,
+	}
+
+	sum := confluence.SummaryFromSnapshot(snap)
+	require.NotNil(t, sum.TradePlan)
+
+	assert.InDelta(t, 640.0, sum.TradePlan.PrimaryExitPrice, 0.01)
+	assert.InDelta(t, 640.0, sum.TradePlan.TradeInvalidationPrice, 0.01)
+	assert.InDelta(t, 590.0, sum.TradePlan.StructureInvalidationPrice, 0.01)
+
+	require.NotNil(t, sum.TradePlan.Invalidation)
+	require.NotNil(t, sum.TradePlan.Invalidation.Trade)
+	assert.InDelta(t, 640.0, sum.TradePlan.Invalidation.Trade.Price, 0.01)
+	assert.Equal(t, "Trade failure", sum.TradePlan.Invalidation.Trade.Label)
+	require.NotNil(t, sum.TradePlan.Invalidation.Structure)
+	assert.InDelta(t, 590.0, sum.TradePlan.Invalidation.Structure.Price, 0.01)
+	assert.Equal(t, "Thesis failure", sum.TradePlan.Invalidation.Structure.Label)
+
+	require.NotNil(t, sum.TradePlan.PrimaryExit)
+	assert.Equal(t, "Trade failure", sum.TradePlan.PrimaryExit.Label)
+	assert.True(t, sum.TradePlan.PrimaryExit.Emphasis)
+
+	cluster := findSummaryStop(sum.TradePlan.Stops, "cluster_floor")
+	require.NotNil(t, cluster)
+	assert.Equal(t, "trade_failure", cluster.HumanLabel)
+
+	b, err := json.Marshal(sum)
+	require.NoError(t, err)
+	body := string(b)
+	assert.Contains(t, body, `"invalidation"`)
+	assert.Contains(t, body, `"primary_exit"`)
+	assert.Contains(t, body, `"trade_failure"`)
+	assert.Contains(t, body, `"thesis_failure"`)
+	assert.Contains(t, body, `"Trade failure"`)
+	assert.Contains(t, body, `"emphasis":true`)
+
+	require.NotEmpty(t, sum.Reasons)
+	assert.Contains(t, sum.Reasons[0], "exit day trade if cluster fails ~640")
+	assert.Contains(t, sum.Reasons[0], "thesis dead below 590 (DEX)")
+}
+
+func findSummaryStop(stops []confluence.StopLevel, tier string) *confluence.StopLevel {
+	for i := range stops {
+		if stops[i].Tier == tier {
+			return &stops[i]
+		}
+	}
+	return nil
+}
+
+func TestSummaryFromSnapshot_poorRiskReward(t *testing.T) {
+	snap := confluence.ConfluenceSnapshot{
+		Ticker:        "CRWD",
+		Spot:          665.0,
+		MarketStatus:  confluence.MarketStatusOpen,
+		ReadinessBand: confluence.ReadinessPossibleEntry,
+		RiskReward:    0.5,
+		UpsidePct:     0.03,
+		DownsidePct:   0.06,
+		BuySignals: []confluence.Signal{
+			{Name: "upside", Status: confluence.SignalAligned},
+			{Name: "downside", Status: confluence.SignalAgainst},
+		},
+	}
+
+	sum := confluence.SummaryFromSnapshot(snap)
+
+	assert.Contains(t, sum.Warnings, "Poor risk/reward — downside exceeds upside")
+	assert.NotContains(t, sum.Reasons, "Adequate upside room to resistance")
+}
+
+func TestSummaryFromSnapshot_gexDexGapWarning(t *testing.T) {
+	plan := confluence.BuildTradePlan(crwdStyleSnapshotForSummary(), confluence.DefaultTradePlanConfig())
+	require.NotNil(t, plan)
+
+	snap := confluence.ConfluenceSnapshot{
+		Ticker:        "CRWD",
+		Spot:          665.0,
+		MarketStatus:  confluence.MarketStatusOpen,
+		ReadinessBand: confluence.ReadinessPossibleEntry,
+		TradePlan:     plan,
+	}
+
+	sum := confluence.SummaryFromSnapshot(snap)
+	found := false
+	for _, w := range sum.Warnings {
+		if strings.Contains(w, "Large air pocket") {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "warnings: %v", sum.Warnings)
+}
+
+func crwdStyleSnapshotForSummary() confluence.ConfluenceSnapshot {
+	return confluence.ConfluenceSnapshot{
+		Ticker:          "CRWD",
+		Spot:            665.0,
+		ReadinessBand:   confluence.ReadinessPossibleEntry,
+		DistanceToEntry: confluence.EntryEarly,
+		Levels: confluence.Levels{
+			Support: []confluence.Level{
+				{Price: 650.0, Source: confluence.LevelSourceGEX, Rank: 1},
+				{Price: 645.0, Source: confluence.LevelSourceGEX, Rank: 2},
+				{Price: 640.0, Source: confluence.LevelSourceGEX, Rank: 3},
+				{Price: 590.0, Source: confluence.LevelSourceDEX, Rank: 4},
+			},
+			NearestSupport:    650.0,
+			HasNearestSupport: true,
+		},
+	}
 }
 
 func TestSellReadinessLabels(t *testing.T) {

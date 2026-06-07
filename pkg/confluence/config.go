@@ -52,8 +52,11 @@ type SignalWeights struct {
 
 // TradePlanConfig holds entry-playbook stop-buffer settings (see trade_plan.go).
 type TradePlanConfig struct {
-	GEXStopBufferPct float64 `yaml:"gex_stop_buffer_pct"`
-	DEXStopBufferPct float64 `yaml:"dex_stop_buffer_pct"`
+	GEXStopBufferPct    float64 `yaml:"gex_stop_buffer_pct"`
+	DEXStopBufferPct    float64 `yaml:"dex_stop_buffer_pct"`
+	ClusterBandPct      float64 `yaml:"cluster_band_pct"`
+	GEXDEXGapWarnPct    float64 `yaml:"gex_dex_gap_warn_pct"`
+	ClusterDEXMinGapPct float64 `yaml:"cluster_dex_min_gap_pct"`
 }
 
 // ScoringConfig holds v2 scoring thresholds and gates.
@@ -181,6 +184,15 @@ func (c *TradePlanConfig) applyDefaults() {
 	}
 	if c.DEXStopBufferPct == 0 {
 		c.DEXStopBufferPct = 0.010
+	}
+	if c.ClusterBandPct == 0 {
+		c.ClusterBandPct = 0.02
+	}
+	if c.GEXDEXGapWarnPct == 0 {
+		c.GEXDEXGapWarnPct = 0.05
+	}
+	if c.ClusterDEXMinGapPct == 0 {
+		c.ClusterDEXMinGapPct = 0.02
 	}
 }
 

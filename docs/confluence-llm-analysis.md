@@ -90,11 +90,16 @@ Proto JSON uses **snake_case**. This is the preferred format for LLM prompts.
 
 **`trade_plan` is not live stop monitoring.** It does not track your entry price, ring buffers, or time-based exits. It answers: *if I enter at the signaled support, what levels below are stops vs average-down adds?*
 
-- **Noise (hold):** Wick below `soft_stop` but spot holds above `hard_stop` — prefer reclaim, not panic exit.
-- **Wrong (exit):** Meaningful break below `hard_stop` / `exit_instead_of_add_below` — exit; do not add.
-- **`intraday_notes`:** Advisory text only (lunch/close bounces, wick tolerance) — not auto-exit logic.
+- **Noise (watch):** Wick below `soft_stop` / `noise_line` — tolerance band; prefer reclaim, not panic exit.
+- **Trade invalidation (day-trade exit):** Break below `cluster_floor` / `trade_failure` — local GEX cluster lost; exit the day trade (primary actionable exit for mean-reversion setups).
+- **Structure invalidation (thesis dead):** Break below `structure_stop` / `thesis_failure` — DEX support lost; full thesis invalid.
+- **Emergency exit:** Confirmed break below `hard_stop` / `emergency_stop` or `exit_instead_of_add_below` — do not add.
 
-Buffers are configurable in `confluence-configs/settings.yaml` (`trade_plan.gex_stop_buffer_pct`, `trade_plan.dex_stop_buffer_pct`).
+Buffers are configurable in `confluence-configs/settings.yaml` (`trade_plan.gex_stop_buffer_pct`, `trade_plan.dex_stop_buffer_pct`, `trade_plan.cluster_band_pct`, `trade_plan.gex_dex_gap_warn_pct`).
+
+**Cluster-aware stops:** When multiple GEX supports cluster within `cluster_band_pct` (default 2%) below the entry anchor and the next DEX support is far below (gap > 2%), the playbook inserts a **`cluster_floor`** stop at the lowest GEX in that band. Average-down adds and `exit_instead_of_add_below` reference the cluster floor — not the distant DEX hard stop. DEX remains as `structure_stop` / `hard_stop` for final structural invalidation. When anchor-to-DEX gap exceeds `gex_dex_gap_warn_pct` (default 5%), `gex_dex_gap_pct` is set on the plan and the summary emits an air-pocket warning.
+
+**Summary JSON human labels:** Internal tier strings (`soft_stop`, `cluster_floor`, etc.) are unchanged for code logic. The summary `trade_plan` enriches stops with `label` / `meaning` (e.g. `trade_failure`, `thesis_failure`) and adds `invalidation.trade` / `invalidation.structure` plus `primary_exit` (emphasizes cluster floor when present — e.g. CRWD ~640, not distant emergency stop ~584).
 
 ### `confluence-test` CLI name mapping
 
