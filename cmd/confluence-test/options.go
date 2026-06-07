@@ -19,6 +19,7 @@ type cliOptions struct {
 	configDir  string
 	format     string
 	jsonOutput bool
+	summary    bool
 }
 
 func parseOptions(args []string) (cliOptions, error) {
@@ -29,11 +30,13 @@ func parseOptions(args []string) (cliOptions, error) {
 	var configDir string
 	var format string
 	var json bool
+	var summary bool
 
 	fs.StringVar(&ticker, "ticker", "", "ticker symbol to score (required)")
 	fs.StringVar(&configDir, "config-dir", defaultConfigDir, "directory containing settings.yaml and sic_sectors.yaml")
 	fs.StringVar(&format, "format", defaultFormat, "output format: json")
 	fs.BoolVar(&json, "json", true, "pretty-print JSON to stdout (alias for --format json)")
+	fs.BoolVar(&summary, "summary", false, "output human-readable summary JSON instead of full snapshot")
 
 	fs.Usage = func() {
 		fmt.Fprintf(osStderr(), "Usage: confluence-test --ticker TICKER [flags]\n\n")
@@ -72,6 +75,7 @@ func parseOptions(args []string) (cliOptions, error) {
 		configDir:  configDir,
 		format:     format,
 		jsonOutput: true,
+		summary:    summary,
 	}, nil
 }
 

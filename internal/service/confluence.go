@@ -49,15 +49,32 @@ func parseConfluenceTicker(method, raw string) (string, error) {
 	return ticker, nil
 }
 
+// GetConfluenceSummary returns a human-readable summary projected from the latest snapshot.
+func (s *ConfluenceService) GetConfluenceSummary(ctx context.Context, req *confluencev1.GetConfluenceRequest) (*confluencev1.ConfluenceSummary, error) {
+	snap, err := s.fetchSnapshot(ctx, req.GetTicker(), "GetConfluenceSummary")
+	if err != nil {
+		return nil, err
+	}
+	return SummaryToProto(pkgconfluence.SummaryFromSnapshot(*snap)), nil
+}
+
 // GetConfluence returns the latest snapshot, bootstrapping from Massive when no scored cache exists.
 func (s *ConfluenceService) GetConfluence(ctx context.Context, req *confluencev1.GetConfluenceRequest) (*confluencev1.ConfluenceSnapshot, error) {
-	ticker, err := parseConfluenceTicker("GetConfluence", req.GetTicker())
+	snap, err := s.fetchSnapshot(ctx, req.GetTicker(), "GetConfluence")
+	if err != nil {
+		return nil, err
+	}
+	return SnapshotToProto(snap), nil
+}
+
+func (s *ConfluenceService) fetchSnapshot(ctx context.Context, rawTicker, method string) (*pkgconfluence.ConfluenceSnapshot, error) {
+	ticker, err := parseConfluenceTicker(method, rawTicker)
 	if err != nil {
 		return nil, err
 	}
 
 	if snap, ok := s.processor.GetSnapshot(ticker); ok && snap != nil && !intconfluence.SnapshotNeedsBootstrap(snap) {
-		return SnapshotToProto(snap), nil
+		return snap, nil
 	}
 
 	handlerCtx, handlerCancel := context.WithTimeout(ctx, s.timeout)
@@ -69,20 +86,16 @@ func (s *ConfluenceService) GetConfluence(ctx context.Context, req *confluencev1
 	defer s.processor.OnUnsubscribe(ticker)
 
 	if snap, ok := s.processor.GetSnapshot(ticker); ok && snap != nil && !intconfluence.SnapshotNeedsBootstrap(snap) {
-		return SnapshotToProto(snap), nil
+		return snap, nil
 	}
 
 	if snap, err := s.processor.BootstrapSnapshot(handlerCtx, ticker); err == nil && snap != nil && !intconfluence.SnapshotNeedsBootstrap(snap) {
-		return SnapshotToProto(snap), nil
+		return snap, nil
 	} else if err != nil {
-		log.Printf("[confluence] GetConfluence bootstrap %s: %v", ticker, err)
+		log.Printf("[confluence] %s bootstrap %s: %v", method, ticker, err)
 	}
 
-	snap, err := waitForReadySnapshot(handlerCtx, s.processor, ticker, s.timeout)
-	if err != nil {
-		return nil, err
-	}
-	return SnapshotToProto(snap), nil
+	return waitForReadySnapshot(handlerCtx, s.processor, ticker, s.timeout)
 }
 
 // WatchConfluence streams snapshot updates when score or signal status changes.

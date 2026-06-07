@@ -125,3 +125,59 @@ func levelToProto(lvl pkgconfluence.Level) *confluencev1.ConfluenceLevel {
 		Expiration: lvl.Expiration,
 	}
 }
+
+// SummaryToProto converts an in-memory confluence summary to its gRPC representation.
+func SummaryToProto(sum pkgconfluence.ConfluenceSummary) *confluencev1.ConfluenceSummary {
+	rsiMinute := sum.Context.RSIMinute.Value
+	rsiUnavailable := sum.Context.RSIMinute.Unavailable
+
+	return &confluencev1.ConfluenceSummary{
+		Ticker: sum.Ticker,
+		Spot:   sum.Spot,
+		AsOf:   sum.AsOf,
+		Market: sum.Market,
+		Verdict: &confluencev1.ConfluenceSummaryVerdict{
+			Buy: &confluencev1.ConfluenceSummaryBuyVerdict{
+				Score:     int32(sum.Verdict.Buy.Score),
+				Readiness: sum.Verdict.Buy.Readiness,
+				Label:     sum.Verdict.Buy.Label,
+			},
+			Sell: &confluencev1.ConfluenceSummarySellVerdict{
+				Score:     int32(sum.Verdict.Sell.Score),
+				Readiness: sum.Verdict.Sell.Readiness,
+				Action:    sum.Verdict.Sell.Action,
+				Label:     sum.Verdict.Sell.Label,
+			},
+		},
+		TradeSetup: &confluencev1.ConfluenceSummaryTradeSetup{
+			Archetype:   sum.TradeSetup.Archetype,
+			EntryTiming: sum.TradeSetup.EntryTiming,
+			ExitTiming:  sum.TradeSetup.ExitTiming,
+			UpsidePct:   sum.TradeSetup.UpsidePct,
+			DownsidePct: sum.TradeSetup.DownsidePct,
+			RiskReward:  sum.TradeSetup.RiskReward,
+		},
+		Context: &confluencev1.ConfluenceSummaryContext{
+			AdrRegime:             sum.Context.ADRRegime,
+			GammaRegime:           sum.Context.GammaRegime,
+			GammaSqueeze:          sum.Context.GammaSqueeze,
+			ShortSqueeze:          sum.Context.ShortSqueeze,
+			RsiMinuteUnavailable:  rsiUnavailable,
+			RsiMinute:             rsiMinute,
+			RsiDaily:              sum.Context.RSIDaily,
+		},
+		Levels: &confluencev1.ConfluenceSummaryLevels{
+			Support:    sum.Levels.Support,
+			Resistance: sum.Levels.Resistance,
+			CallWall:   sum.Levels.CallWall,
+			PutWall:    sum.Levels.PutWall,
+		},
+		Reasons:  sum.Reasons,
+		Warnings: sum.Warnings,
+		Gates: &confluencev1.ConfluenceSummaryGates{
+			UpsideOk:                  sum.Gates.UpsideOK,
+			AdrOk:                     sum.Gates.ADROK,
+			BlockedFromHighConviction: sum.Gates.BlockedFromHighConviction,
+		},
+	}
+}

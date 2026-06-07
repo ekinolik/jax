@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	pkgconfluence "github.com/ekinolik/jax/pkg/confluence"
 )
 
 func main() {
@@ -33,7 +35,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	out, err := json.MarshalIndent(snap, "", "  ")
+	var out []byte
+	if opts.summary {
+		out, err = json.MarshalIndent(pkgconfluence.SummaryFromSnapshot(*snap), "", "  ")
+	} else {
+		out, err = json.MarshalIndent(snap, "", "  ")
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: encode snapshot: %v\n", err)
 		os.Exit(1)

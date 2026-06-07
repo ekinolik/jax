@@ -83,6 +83,52 @@ func (s *watchStreamMock) Send(snap *confluencev1.ConfluenceSnapshot) error {
 	return nil
 }
 
+func TestGetConfluenceSummary_cachedSnapshot(t *testing.T) {
+	snap := &pkgconfluence.ConfluenceSnapshot{
+		Ticker:          "NVDA",
+		Spot:            120.5,
+		Score:           62,
+		ReadinessBand:   pkgconfluence.ReadinessPossibleEntry,
+		SellScore:       28,
+		SellReadiness:   pkgconfluence.SellHold,
+		ExitAction:      pkgconfluence.ExitHold,
+		OIStatus:        pkgconfluence.OIStatusReady,
+		MarketStatus:    pkgconfluence.MarketStatusOpen,
+		UpdatedAt:       time.Now().UTC(),
+		GammaRegime:     pkgconfluence.GammaPositive,
+		DistanceToEntry: pkgconfluence.EntryEarly,
+		Levels: pkgconfluence.Levels{
+			GammaFlip:            118.0,
+			NearestSupport:       118.5,
+			NearestResistance:    125.0,
+			HasNearestSupport:    true,
+			HasNearestResistance: true,
+		},
+		BuySignals: []pkgconfluence.Signal{
+			{Name: "gamma_support", Status: pkgconfluence.SignalAligned},
+		},
+	}
+	proc := &mockConfluenceProcessor{snapshots: map[string]*pkgconfluence.ConfluenceSnapshot{"NVDA": snap}}
+	svc := NewConfluenceService(proc)
+
+	resp, err := svc.GetConfluenceSummary(context.Background(), &confluencev1.GetConfluenceRequest{Ticker: "nvda"})
+	if err != nil {
+		t.Fatalf("GetConfluenceSummary: %v", err)
+	}
+	if resp.Ticker != "NVDA" {
+		t.Errorf("ticker: got %q", resp.Ticker)
+	}
+	if resp.Verdict == nil || resp.Verdict.Buy == nil {
+		t.Fatal("expected buy verdict")
+	}
+	if resp.Verdict.Buy.Score != 62 || resp.Verdict.Buy.Label != "Watch for entry" {
+		t.Errorf("buy verdict: %+v", resp.Verdict.Buy)
+	}
+	if resp.TradeSetup == nil || resp.TradeSetup.Archetype != "mean_reversion" {
+		t.Errorf("trade_setup: %+v", resp.TradeSetup)
+	}
+}
+
 func TestGetConfluence_cachedSnapshot(t *testing.T) {
 	snap := &pkgconfluence.ConfluenceSnapshot{
 		Ticker:        "NVDA",

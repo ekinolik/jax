@@ -151,3 +151,41 @@ func TestSnapshotToProto_nil(t *testing.T) {
 		t.Error("expected nil for nil input")
 	}
 }
+
+func TestSummaryToProto_keyFields(t *testing.T) {
+	sum := pkgconfluence.SummaryFromSnapshot(pkgconfluence.ConfluenceSnapshot{
+		Ticker:          "NET",
+		Spot:            248.5,
+		MarketStatus:    pkgconfluence.MarketStatusOpen,
+		DataAsOf:        time.Date(2026, 6, 6, 14, 32, 0, 0, time.FixedZone("EDT", -4*3600)),
+		Score:           62,
+		ReadinessBand:   pkgconfluence.ReadinessPossibleEntry,
+		SellScore:       28,
+		SellReadiness:   pkgconfluence.SellHold,
+		ExitAction:      pkgconfluence.ExitHold,
+		GammaRegime:     pkgconfluence.GammaPositive,
+		DistanceToEntry: pkgconfluence.EntryEarly,
+		RSI:             32,
+		Levels: pkgconfluence.Levels{
+			NearestSupport:       245,
+			NearestResistance:    258,
+			HasNearestSupport:    true,
+			HasNearestResistance: true,
+		},
+		UpsidePct: 0.042,
+		BuySignals: []pkgconfluence.Signal{
+			{Name: "gamma_support", Status: pkgconfluence.SignalAligned},
+		},
+	})
+
+	proto := SummaryToProto(sum)
+	if proto.Ticker != "NET" || proto.Verdict.Buy.Label != "Watch for entry" {
+		t.Errorf("summary proto: %+v", proto)
+	}
+	if !proto.Context.RsiMinuteUnavailable && proto.Context.RsiMinute != 32 {
+		t.Errorf("rsi_minute: unavailable=%v value=%v", proto.Context.RsiMinuteUnavailable, proto.Context.RsiMinute)
+	}
+	if proto.TradeSetup.Archetype != "mean_reversion" {
+		t.Errorf("archetype: %q", proto.TradeSetup.Archetype)
+	}
+}

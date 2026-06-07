@@ -4,6 +4,8 @@ How to paste JAX Confluence JSON snapshots into Claude, OpenAI, or another LLM t
 
 **Sources:** `grpcurl`, `confluence-test` CLI, jax-ov WebSocket (Phase 4), or debug HTTP (`GET /confluence/debug?ticker=...`).
 
+**Human scan vs LLM batch:** For a quick read on one ticker, use `GetConfluenceSummary` (gRPC), `GET /confluence/summary?ticker=...` (jax-ov), or `confluence-test --summary`. The summary projects verdict, archetype, reasons, warnings, and gates from the full snapshot — no duplicate scoring. For ranking 5–20 tickers in an LLM, use the **full snapshot** batch format in Section 2 below.
+
 ---
 
 ## 1. Purpose

@@ -104,8 +104,9 @@ Flags:
 | `--config-dir` | `confluence-configs/` | Settings and SIC sector mappings |
 | `--format` | `json` | Output format (`json` only in v1) |
 | `--json` | `true` | Pretty-print JSON to stdout |
+| `--summary` | `false` | Output human-readable summary JSON instead of full snapshot |
 
-Progress messages go to stderr; the full `ConfluenceSnapshot` JSON goes to stdout. Requires `POLYGON_API_KEY`. Outside regular trading hours, day open/range fall back to the latest daily bar when minute aggregates are unavailable.
+Progress messages go to stderr; the full `ConfluenceSnapshot` JSON (or summary with `--summary`) goes to stdout. Requires `POLYGON_API_KEY`. Outside regular trading hours, day open/range fall back to the latest daily bar when minute aggregates are unavailable.
 
 ### Phase 2 — Event-driven processor
 
@@ -145,6 +146,7 @@ Proto: `api/proto/confluence/v1/confluence.proto`
 | RPC | Description |
 |-----|-------------|
 | `GetConfluence` | Returns latest scored snapshot; bootstraps from Massive (up to 90s) when cache is empty or still loading |
+| `GetConfluenceSummary` | Returns human-readable summary projected from the latest snapshot (verdict, archetype, reasons, warnings, gates) |
 | `WatchConfluence` | Server-streaming updates when score or signal status changes (processor debounces duplicates); bootstraps before first push when needed |
 
 **Snapshot fields:** `ticker`, `timestamp`, `confluence_score`, `readiness`, `oi_status`, `market_status`, `signals` (gamma/delta/rsi/sector/market), `levels` (support/resistance ladder, `gamma_flip`), `daily_range_position`, `distance_to_entry`, `haptic_level`, `background_level`, plus `spot`, `rsi`, `sector_etf`, `stacked_zone`, `data_as_of`.
@@ -178,6 +180,9 @@ grpcurl -plaintext localhost:50051 list
 
 # One-shot snapshot (bootstraps from Massive when cache is cold; works outside RTH)
 grpcurl -plaintext -d '{"ticker": "NVDA"}' localhost:50051 jax.v1.ConfluenceService/GetConfluence
+
+# Human-readable summary (same bootstrap path as GetConfluence)
+grpcurl -plaintext -d '{"ticker": "NVDA"}' localhost:50051 jax.v1.ConfluenceService/GetConfluenceSummary
 
 # Outside RTH — expect market_status "closed", oi_status "ready", populated levels, data_as_of > 0
 grpcurl -plaintext -d '{"ticker": "NVDA"}' localhost:50051 jax.v1.ConfluenceService/GetConfluence \
