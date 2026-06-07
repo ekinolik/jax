@@ -1,6 +1,6 @@
 # Version information
 VERSION_MAJOR = 0
-VERSION_MINOR = 1
+VERSION_MINOR = 2
 BUILD_VERSION_FILE = .build-version
 VERSION = $(VERSION_MAJOR).$(VERSION_MINOR)
 
@@ -8,8 +8,11 @@ VERSION = $(VERSION_MAJOR).$(VERSION_MINOR)
 PACKAGE_DIR = package
 BUILD_DIR = build_tmp
 
-CURRENT_OS = "linux"
-CURRENT_ARCH = "386"
+CURRENT_OS = linux
+CURRENT_ARCH = amd64
+
+# Pure Go — safe for cross-compilation (no CGO in this project)
+GO_BUILD_ENV = CGO_ENABLED=0
 
 # Get current build number or initialize to 00000
 ifeq ($(wildcard $(BUILD_VERSION_FILE)),)
@@ -25,7 +28,7 @@ define increment_build
 endef
 
 define build-package
-	mkdir -p $(BUILD_DIR)/$(CURRENT_OS)
+	mkdir -p $(BUILD_DIR)/$(CURRENT_OS)/bin
 	cp .env.example $(BUILD_DIR)/$(CURRENT_OS)/.env.example
 	echo "$(FULL_VERSION)" > $(BUILD_DIR)/$(CURRENT_OS)/VERSION
 
@@ -39,15 +42,16 @@ define build-package
 	mkdir -p $(BUILD_DIR)/$(CURRENT_OS)/cache-configs
 	cp -r cache-configs/example.yaml $(BUILD_DIR)/$(CURRENT_OS)/cache-configs/
 
-
-
-	mkdir -p ${BUILD_DIR}/bin
-	env GOOS=${CURRENT_OS} GOARCH=${CURRENT_ARCH} go build -v -o ${BUILD_DIR}/$(CURRENT_OS)/bin/jax-$(CURRENT_OS)-$(CURRENT_ARCH) cmd/server/main.go
+	env $(GO_BUILD_ENV) GOOS=$(CURRENT_OS) GOARCH=$(CURRENT_ARCH) go build -v -o $(BUILD_DIR)/$(CURRENT_OS)/bin/jax-$(CURRENT_OS)-$(CURRENT_ARCH) cmd/server/main.go
+	env $(GO_BUILD_ENV) GOOS=$(CURRENT_OS) GOARCH=$(CURRENT_ARCH) go build -v -o $(BUILD_DIR)/$(CURRENT_OS)/bin/confluence-test-$(CURRENT_OS)-$(CURRENT_ARCH) ./cmd/confluence-test
 endef
 
 # Full version with build number
 FULL_VERSION = $(VERSION).$(BUILD_NUMBER)
 
+LINUX_AMD64_TARBALL = $(PACKAGE_DIR)/jax-$(FULL_VERSION)-linux-amd64.tar.gz
+LINUX_ARM64_TARBALL = $(PACKAGE_DIR)/jax-$(FULL_VERSION)-linux-arm64.tar.gz
+# Legacy 32-bit x86 tarball name (kept for backward compatibility)
 LINUX_TARBALL = $(PACKAGE_DIR)/jax-$(FULL_VERSION)-linux-x64.tar.gz
 DARWIN_TARBALL = $(PACKAGE_DIR)/jax-$(FULL_VERSION)-darwin-arm64.tar.gz
 
@@ -68,15 +72,29 @@ confluence-test:
 	mkdir -p bin
 	go build -o bin/confluence-test ./cmd/confluence-test
 
-.PHONY: build-production
-build-production:
+.PHONY: build-linux-amd64 build-linux-arm64 build-production build-production-arm64
+build-linux-amd64:
 	mkdir -p bin
-	env GOOS=linux GOARCH=386 go build -v -o bin/jax-linux-386 cmd/server/main.go
+	env $(GO_BUILD_ENV) GOOS=linux GOARCH=amd64 go build -v -o bin/jax-linux-amd64 cmd/server/main.go
+	env $(GO_BUILD_ENV) GOOS=linux GOARCH=amd64 go build -v -o bin/confluence-test-linux-amd64 ./cmd/confluence-test
 
-.PHONY: package-production
+build-linux-arm64:
+	mkdir -p bin
+	env $(GO_BUILD_ENV) GOOS=linux GOARCH=arm64 go build -v -o bin/jax-linux-arm64 cmd/server/main.go
+	env $(GO_BUILD_ENV) GOOS=linux GOARCH=arm64 go build -v -o bin/confluence-test-linux-arm64 ./cmd/confluence-test
+
+build-production: build-linux-amd64
+
+build-production-arm64: build-linux-arm64
+
+.PHONY: package-production package-production-arm64
 package-production: build-production
 	mkdir -p package
-	tar -zcf package/jax-linux-386.tar.gz bin/jax-linux-386 scripts/
+	tar -zcf package/jax-linux-amd64.tar.gz bin/jax-linux-amd64 bin/confluence-test-linux-amd64 scripts/
+
+package-production-arm64: build-production-arm64
+	mkdir -p package
+	tar -zcf package/jax-linux-arm64.tar.gz bin/jax-linux-arm64 bin/confluence-test-linux-arm64 scripts/
 
 .PHONY: run
 run:
@@ -89,22 +107,35 @@ start-packaging:
 
 	$(call increment_build)
 
-.PHONY: package-linux
+.PHONY: package-linux package-linux-amd64 package-linux-arm64
+package-linux: CURRENT_OS = linux
+package-linux: CURRENT_ARCH = 386
 package-linux:
-	# Package for Linux x64
-	@echo "Creating Linux x64 package..."
-
+	# Legacy alias — 32-bit x86 (386)
+	@echo "Creating Linux x86 (386) package..."
 	$(call build-package)
-
 	tar -zcf $(LINUX_TARBALL) -C $(BUILD_DIR) -s /^$(CURRENT_OS)/jax/ $(CURRENT_OS)
 
-.PHONY: package-mac
-package-mac:
-	# Package for Mac ARM64
-	@echo "Creating Mac ARM64 package..."
-
+package-linux-amd64: CURRENT_OS = linux
+package-linux-amd64: CURRENT_ARCH = amd64
+package-linux-amd64:
+	@echo "Creating Linux AMD64 package (t3.nano)..."
 	$(call build-package)
+	tar -zcf $(LINUX_AMD64_TARBALL) -C $(BUILD_DIR) -s /^$(CURRENT_OS)/jax/ $(CURRENT_OS)
 
+package-linux-arm64: CURRENT_OS = linux
+package-linux-arm64: CURRENT_ARCH = arm64
+package-linux-arm64:
+	@echo "Creating Linux ARM64 package (t4g.nano)..."
+	$(call build-package)
+	tar -zcf $(LINUX_ARM64_TARBALL) -C $(BUILD_DIR) -s /^$(CURRENT_OS)/jax/ $(CURRENT_OS)
+
+.PHONY: package-mac
+package-mac: CURRENT_OS = darwin
+package-mac: CURRENT_ARCH = arm64
+package-mac:
+	@echo "Creating Mac ARM64 package..."
+	$(call build-package)
 	tar -zcf $(DARWIN_TARBALL) -C $(BUILD_DIR) -s /^$(CURRENT_OS)/jax/ $(CURRENT_OS)
 
 .PHONY: finish-packaging
@@ -113,6 +144,7 @@ finish-packaging:
 
 .PHONY: package-all
 package-all: start-packaging
-	$(MAKE) package-linux CURRENT_OS=linux CURRENT_ARCH=386
-	$(MAKE) package-mac CURRENT_OS=darwin CURRENT_ARCH=arm64
+	$(MAKE) package-linux-amd64
+	$(MAKE) package-linux-arm64
+	$(MAKE) package-mac
 	$(MAKE) finish-packaging
