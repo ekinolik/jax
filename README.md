@@ -209,9 +209,9 @@ grpcurl \
 
 **Later phases:** jax-ov WebSocket gateway (Phase 4).
 
-### Phase 5 — Hardening & rate-limit tuning (t3.nano)
+### Phase 5 — Hardening & rate-limit tuning (t3.nano / t4g.nano)
 
-Defaults in `confluence-configs/settings.yaml` are tuned for a **t3.nano** (512MB RAM, shared with the node.js frontend).
+Defaults in `confluence-configs/settings.yaml` are tuned for a small EC2 instance (512MB RAM, shared with the node.js frontend): **t3.nano** (x86_64) or **t4g.nano** (ARM64 Graviton2).
 
 | Knob | Default | Purpose |
 |------|---------|---------|
@@ -225,7 +225,24 @@ Defaults in `confluence-configs/settings.yaml` are tuned for a **t3.nano** (512M
 
 **NYSE trading calendar:** RTH checks and OI prefetch use `github.com/scmhub/calendar` (XNYS). Weekends and market holidays (e.g. Independence Day) return `market_status: "closed"` and skip the 08:00 ET OI prefetch.
 
-**Deployment on t3.nano**
+**Deployment on t3.nano / t4g.nano**
+
+Build and package for your instance architecture (cross-compile from Mac or Linux; pure Go, `CGO_ENABLED=0`):
+
+```bash
+# t4g.nano — ARM64 Graviton2 (recommended for new deployments)
+make build-linux-arm64
+make package-linux-arm64
+
+# t3.nano — x86_64
+make build-linux-amd64
+make package-linux-amd64
+
+# All release tarballs (linux amd64 + arm64, darwin arm64)
+make package-all
+```
+
+Binaries: `bin/jax-linux-arm64` or `bin/jax-linux-amd64` (plus matching `confluence-test-*`). See [scripts/deploy/README-linux.md](scripts/deploy/README-linux.md) for deploy steps.
 
 1. Set `POLYGON_API_KEY` and `CONFLUENCE_CACHE_DIR=./cache/confluence`
 2. Limit active tickers via `max_active_tickers: 5` (hard cap on concurrent watches)
@@ -303,6 +320,19 @@ make proto
 ```bash
 make build
 ```
+
+### Production packaging (AWS EC2)
+
+Cross-compile Linux binaries for deployment (pure Go; no CGO):
+
+```bash
+make build-linux-arm64    # t4g.nano (ARM64 Graviton2)
+make build-linux-amd64    # t3.nano (x86_64)
+make package-linux-arm64  # versioned tarball in package/
+make package-all          # amd64 + arm64 Linux + darwin arm64
+```
+
+See [scripts/deploy/README-linux.md](scripts/deploy/README-linux.md) for full deploy instructions.
 
 ## Running the Service
 
