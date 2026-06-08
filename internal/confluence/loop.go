@@ -57,7 +57,7 @@ func (p *Processor) Start(ctx context.Context) error {
 		p.hub.OnSpotUpdate(p.onSpotTick)
 	}
 
-	p.wg.Add(3)
+	p.wg.Add(4)
 	go func() {
 		defer p.wg.Done()
 		p.runPrefetchScheduler()
@@ -70,7 +70,10 @@ func (p *Processor) Start(ctx context.Context) error {
 		defer p.wg.Done()
 		p.runRTHMonitor()
 	}()
-	go p.bootstrapWatchlistIfClosed()
+	go func() {
+		defer p.wg.Done()
+		p.bootstrapWatchlistIfClosed()
+	}()
 	return nil
 }
 
@@ -80,6 +83,7 @@ func (p *Processor) Stop() {
 		return
 	}
 	p.cancel()
+	p.stopAllTimers()
 	p.wg.Wait()
 	p.cancel = nil
 	p.ctx = nil
@@ -93,6 +97,14 @@ func (p *Processor) Stop() {
 		delete(p.tickers, ticker)
 	}
 	p.tickerMu.Unlock()
+}
+
+func (p *Processor) stopAllTimers() {
+	p.tickerMu.Lock()
+	defer p.tickerMu.Unlock()
+	for _, rt := range p.tickers {
+		p.stopTimersLocked(rt)
+	}
 }
 
 func (p *Processor) onSpotTick(ticker string, tick stream.SpotTick) {

@@ -137,7 +137,7 @@ make confluence-test
 curl -s 'http://localhost:8081/confluence/debug?ticker=NVDA' | head
 ```
 
-Graceful shutdown: `SIGINT`/`SIGTERM` stops gRPC, stream hub, and confluence processor.
+Graceful shutdown: `SIGINT`/`SIGTERM` tears down in order — confluence processor, stream hub, gRPC (15s graceful then force), scheduler, optional debug HTTP. A second signal forces immediate gRPC stop. Each component has a stop timeout so shutdown does not hang indefinitely.
 
 ### Phase 3 — gRPC ConfluenceService
 

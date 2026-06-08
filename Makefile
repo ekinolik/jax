@@ -46,7 +46,7 @@ define build-package
 	mkdir -p $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/confluence-configs
 	cp confluence-configs/*.yaml $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/confluence-configs/
 
-	env $(GO_BUILD_ENV) GOOS=$(CURRENT_OS) GOARCH=$(CURRENT_ARCH) go build -v $(VERSION_LDFLAGS) -o $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/bin/jax cmd/server/main.go
+	env $(GO_BUILD_ENV) GOOS=$(CURRENT_OS) GOARCH=$(CURRENT_ARCH) go build -v $(VERSION_LDFLAGS) -o $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/bin/jax ./cmd/server
 	env $(GO_BUILD_ENV) GOOS=$(CURRENT_OS) GOARCH=$(CURRENT_ARCH) go build -v -o $(BUILD_DIR)/$(CURRENT_OS)-$(CURRENT_ARCH)/bin/confluence-test ./cmd/confluence-test
 endef
 
@@ -75,7 +75,7 @@ bump-version:
 .PHONY: build
 build: bump-version
 	mkdir -p bin
-	go build $(VERSION_LDFLAGS) -o bin/server cmd/server/main.go
+	go build $(VERSION_LDFLAGS) -o bin/server ./cmd/server
 
 .PHONY: confluence-test
 confluence-test:
@@ -85,12 +85,12 @@ confluence-test:
 .PHONY: build-linux-amd64 build-linux-arm64 build-production build-production-arm64
 build-linux-amd64: bump-version
 	mkdir -p bin
-	env $(GO_BUILD_ENV) GOOS=linux GOARCH=amd64 go build -v $(VERSION_LDFLAGS) -o bin/jax-linux-amd64 cmd/server/main.go
+	env $(GO_BUILD_ENV) GOOS=linux GOARCH=amd64 go build -v $(VERSION_LDFLAGS) -o bin/jax-linux-amd64 ./cmd/server
 	env $(GO_BUILD_ENV) GOOS=linux GOARCH=amd64 go build -v -o bin/confluence-test-linux-amd64 ./cmd/confluence-test
 
 build-linux-arm64: bump-version
 	mkdir -p bin
-	env $(GO_BUILD_ENV) GOOS=linux GOARCH=arm64 go build -v $(VERSION_LDFLAGS) -o bin/jax-linux-arm64 cmd/server/main.go
+	env $(GO_BUILD_ENV) GOOS=linux GOARCH=arm64 go build -v $(VERSION_LDFLAGS) -o bin/jax-linux-arm64 ./cmd/server
 	env $(GO_BUILD_ENV) GOOS=linux GOARCH=arm64 go build -v -o bin/confluence-test-linux-arm64 ./cmd/confluence-test
 
 build-production: build-linux-amd64
@@ -118,7 +118,7 @@ package-production-arm64: build-production-arm64
 
 .PHONY: run
 run:
-	go run cmd/server/main.go 
+	go run ./cmd/server
 
 .PHONY: start-packaging
 start-packaging: bump-version

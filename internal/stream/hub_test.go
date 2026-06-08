@@ -1,10 +1,12 @@
 package stream
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestReconnectBackoffCapsAtMax(t *testing.T) {
@@ -38,4 +40,44 @@ func TestHubInjectSpotInvokesHandler(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("handler not invoked")
 	}
+}
+
+func TestHubSupervisorExitsOnCancel(t *testing.T) {
+	h := &Hub{apiKey: "test"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	h.runSupervisor(ctx)
+}
+
+func TestConnectWithContextRespectsCancellation(t *testing.T) {
+	h, err := NewHub("test-key")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = h.connectWithContext(ctx)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestHubStopReturnsQuickly(t *testing.T) {
+	h, err := NewHub("test-key")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, h.Start(ctx))
+
+	done := make(chan struct{})
+	go func() {
+		h.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("Stop blocked")
+	}
+	cancel()
 }

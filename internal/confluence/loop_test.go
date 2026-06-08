@@ -58,6 +58,25 @@ func TestShouldPrefetchNow_weekdayAtConfiguredTime(t *testing.T) {
 	assert.False(t, p.shouldPrefetchNow(saturday))
 }
 
+func TestProcessorStopReturnsQuickly(t *testing.T) {
+	settings := testSettings(t)
+	p := NewProcessor(settings, testSectors(t), NewRegistry(5), nil, nil, nil)
+	ctx := context.Background()
+	require.NoError(t, p.Start(ctx))
+
+	done := make(chan struct{})
+	go func() {
+		p.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop blocked")
+	}
+}
+
 func TestWatchSubscribeAndSnapshot(t *testing.T) {
 	settings := testSettings(t)
 	registry := NewRegistry(settings.MaxActiveTickers)

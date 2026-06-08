@@ -244,18 +244,8 @@ func main() {
 
 	sched := startCacheAndCreateScheduler(cfg)
 	sched.Start()
-	defer sched.Stop()
 
 	processor, hub, debugSrv := startConfluence(cfg)
-	defer hub.Stop()
-	defer processor.Stop()
-	if debugSrv != nil {
-		defer func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = debugSrv.Shutdown(shutdownCtx)
-		}()
-	}
 
 	insecureLocal := os.Getenv("JAX_CONFLUENCE_INSECURE_LOCAL") == "true"
 	if insecureLocal && cfg.Env != config.EnvLocal {
@@ -301,6 +291,7 @@ func main() {
 	reflection.Register(s)
 
 	sigCh := make(chan os.Signal, 1)
+	forceCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
@@ -310,21 +301,18 @@ func main() {
 			log.Printf("Starting gRPC server on port %d with mTLS enabled", cfg.Port)
 		}
 		if err := s.Serve(lis); err != nil {
-			log.Fatalf("failed to serve: %v", err)
+			log.Printf("gRPC server stopped: %v", err)
 		}
 	}()
 
 	<-sigCh
-	log.Printf("Shutting down...")
-	done := make(chan struct{})
-	go func() {
-		s.GracefulStop()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(15 * time.Second):
-		log.Printf("GracefulStop timed out after 15s; forcing Stop")
-		s.Stop()
-	}
+	signal.Notify(forceCh, syscall.SIGINT, syscall.SIGTERM)
+	shutdownServer(shutdownTargets{
+		grpcServer: s,
+		listener:   lis,
+		processor:  processor,
+		hub:        hub,
+		scheduler:  sched,
+		debugSrv:   debugSrv,
+	}, forceCh)
 }

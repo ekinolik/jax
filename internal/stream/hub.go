@@ -102,8 +102,9 @@ func (h *Hub) Stop() {
 	if cancel != nil {
 		cancel()
 	}
-	h.runWg.Wait()
+	// Close the client before waiting so blocked Output/Error reads and Connect unblock.
 	h.closeClient()
+	h.runWg.Wait()
 }
 
 // Subscribe registers interest in a ticker and subscribes to T.{ticker} when first referenced.
@@ -216,15 +217,35 @@ func (h *Hub) ensureConnected(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if err := h.client.Connect(); err != nil {
+	if err := h.connectWithContext(ctx); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if recreateErr := h.recreateClient(); recreateErr != nil {
 			return fmt.Errorf("connect stream hub: %w (recreate: %v)", err, recreateErr)
 		}
-		if err := h.client.Connect(); err != nil {
-			return fmt.Errorf("connect stream hub after recreate: %w", err)
+		if err := h.connectWithContext(ctx); err != nil {
+			return err
 		}
 	}
-	return h.resubscribeAll()
+	return h.resubscribeAll(ctx)
+}
+
+func (h *Hub) connectWithContext(ctx context.Context) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- h.client.Connect()
+	}()
+	select {
+	case <-ctx.Done():
+		h.closeClient()
+		return ctx.Err()
+	case err := <-errCh:
+		return err
+	}
 }
 
 func (h *Hub) recreateClient() error {
@@ -248,7 +269,7 @@ func (h *Hub) closeClient() {
 	}
 }
 
-func (h *Hub) resubscribeAll() error {
+func (h *Hub) resubscribeAll(ctx context.Context) error {
 	h.mu.RLock()
 	tickers := make([]string, 0, len(h.subs))
 	for ticker, count := range h.subs {
@@ -259,6 +280,9 @@ func (h *Hub) resubscribeAll() error {
 	h.mu.RUnlock()
 
 	for _, ticker := range tickers {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if err := h.client.Subscribe(massivews.StocksTrades, ticker); err != nil {
 			return fmt.Errorf("resubscribe trades for %s: %w", ticker, err)
 		}
