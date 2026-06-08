@@ -21,10 +21,10 @@ else
     BUILD_NUMBER = $(shell cat $(BUILD_VERSION_FILE))
 endif
 
-# Increment build number function
+# Increment build number function (10# prefix avoids octal mis-parse of e.g. 00008)
 define increment_build
-	$(eval BUILD_NUMBER := $(shell printf "%05d" $$(($(BUILD_NUMBER) + 1))))
-    @echo "$(BUILD_NUMBER)" > $(BUILD_VERSION_FILE)
+	$(eval BUILD_NUMBER := $(shell bn='$(BUILD_NUMBER)'; [ -z "$$bn" ] && bn=0; printf "%05d" $$((10#$$bn + 1))))
+	@echo "$(BUILD_NUMBER)" > $(BUILD_VERSION_FILE)
 endef
 
 define build-package
@@ -68,8 +68,13 @@ proto:
 		api/proto/market/v1/market.proto \
 		api/proto/confluence/v1/confluence.proto
 
+.PHONY: bump-version
+bump-version:
+	$(call increment_build)
+
 .PHONY: build
-build:
+build: bump-version
+	mkdir -p bin
 	go build $(VERSION_LDFLAGS) -o bin/server cmd/server/main.go
 
 .PHONY: confluence-test
@@ -78,12 +83,12 @@ confluence-test:
 	go build -o bin/confluence-test ./cmd/confluence-test
 
 .PHONY: build-linux-amd64 build-linux-arm64 build-production build-production-arm64
-build-linux-amd64:
+build-linux-amd64: bump-version
 	mkdir -p bin
 	env $(GO_BUILD_ENV) GOOS=linux GOARCH=amd64 go build -v $(VERSION_LDFLAGS) -o bin/jax-linux-amd64 cmd/server/main.go
 	env $(GO_BUILD_ENV) GOOS=linux GOARCH=amd64 go build -v -o bin/confluence-test-linux-amd64 ./cmd/confluence-test
 
-build-linux-arm64:
+build-linux-arm64: bump-version
 	mkdir -p bin
 	env $(GO_BUILD_ENV) GOOS=linux GOARCH=arm64 go build -v $(VERSION_LDFLAGS) -o bin/jax-linux-arm64 cmd/server/main.go
 	env $(GO_BUILD_ENV) GOOS=linux GOARCH=arm64 go build -v -o bin/confluence-test-linux-arm64 ./cmd/confluence-test
@@ -116,11 +121,9 @@ run:
 	go run cmd/server/main.go 
 
 .PHONY: start-packaging
-start-packaging:
+start-packaging: bump-version
 	mkdir -p $(BUILD_DIR)
 	mkdir -p $(PACKAGE_DIR)
-
-	$(call increment_build)
 
 .PHONY: package-linux package-linux-amd64 package-linux-arm64
 package-linux: CURRENT_OS = linux

@@ -2,6 +2,7 @@ package confluence
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/ekinolik/jax/internal/polygon"
@@ -39,6 +40,9 @@ func (p *Processor) applyRetryConfig(client *polygon.Client) {
 }
 
 func (p *Processor) fetchRSI(ctx context.Context, ticker string) (float64, time.Time, error) {
+	if p.client == nil {
+		return 0, time.Time{}, fmt.Errorf("polygon client not configured")
+	}
 	if err := p.acquireRSISlot(ctx); err != nil {
 		return 0, time.Time{}, err
 	}

@@ -62,6 +62,14 @@ func (m *mockConfluenceProcessor) Watch(ctx context.Context, ticker string) (<-c
 	return ch, func() {}, nil
 }
 
+func (m *mockConfluenceProcessor) RefreshSnapshotLive(ctx context.Context, ticker string) (*pkgconfluence.ConfluenceSnapshot, error) {
+	ticker = pkgconfluence.NormalizeTicker(ticker)
+	if snap, ok := m.snapshots[ticker]; ok {
+		return snap, nil
+	}
+	return nil, nil
+}
+
 type watchStreamMock struct {
 	ctx    context.Context
 	sent   []*confluencev1.ConfluenceSnapshot
@@ -252,6 +260,10 @@ func (b *blockingMockProcessor) Watch(ctx context.Context, ticker string) (<-cha
 	return b.ch, func() {}, nil
 }
 
+func (b *blockingMockProcessor) RefreshSnapshotLive(context.Context, string) (*pkgconfluence.ConfluenceSnapshot, error) {
+	return nil, nil
+}
+
 func TestGetConfluence_subscribeThenSnapshot(t *testing.T) {
 	proc := &delayedMockProcessor{}
 	svc := NewConfluenceService(proc)
@@ -305,4 +317,8 @@ func (d *delayedMockProcessor) BootstrapSnapshot(context.Context, string) (*pkgc
 
 func (d *delayedMockProcessor) Watch(context.Context, string) (<-chan *pkgconfluence.ConfluenceSnapshot, func(), error) {
 	return nil, nil, io.EOF
+}
+
+func (d *delayedMockProcessor) RefreshSnapshotLive(context.Context, string) (*pkgconfluence.ConfluenceSnapshot, error) {
+	return nil, nil
 }

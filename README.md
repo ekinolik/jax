@@ -321,18 +321,22 @@ make proto
 make build
 ```
 
+`make build` increments the build number in `.build-version` (same mechanism as packaging) and embeds the full version (e.g. `0.2.00008`) into `bin/server` via linker flags.
+
 ### Production packaging (AWS EC2)
 
 Cross-compile Linux binaries for deployment (pure Go; no CGO):
 
 ```bash
-make build-linux-arm64    # t4g.nano (ARM64 Graviton2)
-make build-linux-amd64    # t3.nano (x86_64)
-make package-linux-arm64  # versioned tarball in package/
-make package-all          # separate tarballs: linux amd64 + arm64, darwin arm64
+make build-linux-arm64    # t4g.nano (ARM64 Graviton2); bumps .build-version
+make build-linux-amd64    # t3.nano (x86_64); bumps .build-version
+make package-linux-arm64  # versioned tarball in package/ (no extra bump)
+make package-all          # bumps once, then separate tarballs: linux amd64 + arm64, darwin arm64
 ```
 
 Each versioned tarball includes `bin/jax` and `bin/confluence-test`, plus `confluence-configs/` (`settings.yaml`, `sic_sectors.yaml`), `cache-configs/`, scripts, `.env.example`, and related deploy files. See [scripts/deploy/README-linux.md](scripts/deploy/README-linux.md) for the full layout.
+
+Build-number increments: `make build`, `make build-linux-amd64`, and `make build-linux-arm64` each bump `.build-version` once per invocation (Make runs the shared `bump-version` step at most once when several of these run together). `make package-all` bumps once at the start via `start-packaging`; individual `make package-linux-*` targets do not bump (use `package-all` or run a build target first). `make package-production` bumps via its `build-production` dependency.
 
 Check the running package version with `./bin/jax --version` after extracting a tarball (or `bin/server --version` for local builds). The version matches the `VERSION` file in packaged releases (e.g. `jax 0.2.00005`).
 

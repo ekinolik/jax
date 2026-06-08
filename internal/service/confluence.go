@@ -23,6 +23,7 @@ type ConfluenceProcessor interface {
 	OnSubscribe(ctx context.Context, ticker string, now time.Time) error
 	OnUnsubscribe(ticker string)
 	BootstrapSnapshot(ctx context.Context, ticker string) (*pkgconfluence.ConfluenceSnapshot, error)
+	RefreshSnapshotLive(ctx context.Context, ticker string) (*pkgconfluence.ConfluenceSnapshot, error)
 }
 
 // ConfluenceService serves ConfluenceService gRPC requests.
@@ -74,7 +75,7 @@ func (s *ConfluenceService) fetchSnapshot(ctx context.Context, rawTicker, method
 	}
 
 	if snap, ok := s.processor.GetSnapshot(ticker); ok && snap != nil && !intconfluence.SnapshotNeedsBootstrap(snap) {
-		return snap, nil
+		return s.refreshLiveSnapshot(ctx, ticker, method, snap)
 	}
 
 	handlerCtx, handlerCancel := context.WithTimeout(ctx, s.timeout)
@@ -86,16 +87,36 @@ func (s *ConfluenceService) fetchSnapshot(ctx context.Context, rawTicker, method
 	defer s.processor.OnUnsubscribe(ticker)
 
 	if snap, ok := s.processor.GetSnapshot(ticker); ok && snap != nil && !intconfluence.SnapshotNeedsBootstrap(snap) {
-		return snap, nil
+		return s.refreshLiveSnapshot(handlerCtx, ticker, method, snap)
 	}
 
 	if snap, err := s.processor.BootstrapSnapshot(handlerCtx, ticker); err == nil && snap != nil && !intconfluence.SnapshotNeedsBootstrap(snap) {
-		return snap, nil
+		return s.refreshLiveSnapshot(handlerCtx, ticker, method, snap)
 	} else if err != nil {
 		log.Printf("[confluence] %s bootstrap %s: %v", method, ticker, err)
 	}
 
-	return waitForReadySnapshot(handlerCtx, s.processor, ticker, s.timeout)
+	snap, err := waitForReadySnapshot(handlerCtx, s.processor, ticker, s.timeout)
+	if err != nil {
+		return nil, err
+	}
+	return s.refreshLiveSnapshot(handlerCtx, ticker, method, snap)
+}
+
+func (s *ConfluenceService) refreshLiveSnapshot(
+	ctx context.Context,
+	ticker, method string,
+	fallback *pkgconfluence.ConfluenceSnapshot,
+) (*pkgconfluence.ConfluenceSnapshot, error) {
+	refreshed, err := s.processor.RefreshSnapshotLive(ctx, ticker)
+	if err != nil {
+		log.Printf("[confluence] %s live refresh %s: %v", method, ticker, err)
+		return fallback, nil
+	}
+	if refreshed != nil {
+		return refreshed, nil
+	}
+	return fallback, nil
 }
 
 // WatchConfluence streams snapshot updates when score or signal status changes.
