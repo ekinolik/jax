@@ -78,7 +78,7 @@ When `OIStatus` is `loading`, GEX/DEX signals are suppressed; RSI, market, secto
 - RSI is fetched fresh on every recompute — never cached
 - Open interest is cached on disk for the current trading day only (`oi/{TICKER}_{DATE}_{EXPIRATION}.json`)
 - Confluence processing runs during regular trading hours (9:30–16:00 ET, configurable in `confluence-configs/settings.yaml`)
-- **Closed-market bootstrap** — on cold start or first `GetConfluence`/`WatchConfluence` with no scored cache, the server performs a blocking one-shot Massive fetch (same path as `confluence-test`), even outside RTH; stale last-session spot/OI/greeks are acceptable. Response includes `market_status: "closed"`, `oi_status: "ready"`, populated `levels`, and `data_as_of` (Unix seconds for the latest input timestamp).
+- **Background OI/bootstrap** — cold tickers spawn a per-ticker goroutine for OI fetch and scoring. Unary handlers return `oi_status: "loading"` immediately when bootstrap is idle, or wait up to 90s when warmup is already running. Completed background work always updates the in-memory snapshot cache (even after the handler unsubscribes) so a follow-up `GetConfluence`/`GetConfluenceSummary` returns scored levels and RSI.
 - SPY uses dual expiration (soonest + soonest weekly Friday) for OI levels
 
 ### CLI test tool
@@ -137,7 +137,7 @@ make confluence-test
 curl -s 'http://localhost:8081/confluence/debug?ticker=NVDA' | head
 ```
 
-Graceful shutdown: `SIGINT`/`SIGTERM` tears down in order — confluence processor, stream hub, gRPC (15s graceful then force), scheduler, optional debug HTTP. A second signal forces immediate gRPC stop. Each component has a stop timeout so shutdown does not hang indefinitely.
+Graceful shutdown: `SIGINT`/`SIGTERM` tears down in order — confluence processor (cancels in-flight bootstrap/OI), stream hub, gRPC (15s graceful then force), scheduler, optional debug HTTP. A second signal forces immediate gRPC stop. Each component has a stop timeout so shutdown does not hang indefinitely.
 
 ### Phase 3 — gRPC ConfluenceService
 
@@ -145,15 +145,15 @@ Proto: `api/proto/confluence/v1/confluence.proto`
 
 | RPC | Description |
 |-----|-------------|
-| `GetConfluence` | Returns latest scored snapshot; bootstraps from Massive (up to 90s) when cache is empty or still loading |
+| `GetConfluence` | Returns the latest snapshot immediately when bootstrap is idle. Cold tickers activate per-ticker background OI/bootstrap; the handler may return `oi_status: "loading"` right away or wait up to **90s** while that ticker's warmup runs (other tickers are unaffected). Background OI completion always writes a scored snapshot to cache even after the handler unsubscribes — retry within the idle grace window (5 min) for full levels/RSI. Each REST page is capped at 30s with ctx-aware retries (429/5xx/timeouts) |
 | `GetConfluenceSummary` | Returns human-readable summary projected from the latest snapshot (verdict, archetype, `trade_plan`, reasons, warnings, gates) |
-| `WatchConfluence` | Server-streaming updates when score or signal status changes (processor debounces duplicates); bootstraps before first push when needed |
+| `WatchConfluence` | Server-streaming updates when score or signal status changes (processor debounces duplicates); cold tickers receive a loading snapshot first, then scored updates when background fetch completes |
 
 **Snapshot fields:** `ticker`, `timestamp`, `confluence_score`, `readiness`, `oi_status`, `market_status`, `signals` (gamma/delta/rsi/sector/market), `levels` (support/resistance ladder, `gamma_flip`), `daily_range_position`, `distance_to_entry`, `haptic_level`, `background_level`, plus `spot`, `rsi`, `sector_etf`, `stacked_zone`, `data_as_of`, `sell_score`, and **`trade_plan`** (static entry playbook when buy readiness is `possible_entry`+ — entry zone, stops, average-down levels; not live stop monitoring).
 
 **`trade_plan` vs `sell_score`:** `trade_plan` is a pre-trade playbook anchored to buy support (soft/structure/hard stops and add levels below entry). `sell_score` is unchanged — resistance / profit-taking for long exits.
 
-**`trade_plan` human labels (v2.1):** Stops include `label` / `meaning` (e.g. `trade_failure`, `thesis_failure`). Summary and snapshot protos also expose `trade_invalidation_price`, `structure_invalidation_price`, `primary_exit_price`, `invalidation` (`trade` / `structure`), and `primary_exit` (emphasis on cluster floor when present). `confluence-test --summary` emits the same fields with snake_case JSON keys.
+**`trade_plan` human labels (v2.1):** Stops include `label` / `meaning` (e.g. `trade_failure`, `thesis_failure`). Summary and snapshot protos also expose `trade_invalidation_price`, `structure_invalidation_price`, `primary_exit_price`, `invalidation` (`trade` / `structure`), and `primary_exit` (emphasis on cluster floor when present). `confluence-test --summary` emits the same fields with snake_case JSON keys. Average-down tier `initial_entry` is the first buy at the anchor; `add_1` uses the next GEX support or a synthetic midpoint when cluster floor is active but no mid-band support exists (`min_add_gap_pct` in settings).
 
 **Local plaintext for jax-ov (Phase 4 prep)**
 
@@ -169,7 +169,7 @@ This binds **127.0.0.1:50051** only and disables mTLS for **all** gRPC services 
 
 Without that flag, use mTLS client certificates (see Security section) or grpcurl with `-cacert`, `-cert`, and `-key`.
 
-Outside RTH, `GetConfluence` blocks up to 90s while bootstrapping from Massive. A useful closed-market response has `market_status: "closed"`, `oi_status: "ready"`, non-empty `levels`, and `data_as_of` set to the last trade/OI timestamp.
+During RTH, a cold ticker (e.g. SNDK with a long OI chain) may return `oi_status: "loading"` on the first call; the handler waits up to 90s when background OI is already in flight, otherwise retry within a few minutes for `oi_status: "ready"` with populated `levels` and minute RSI. Outside RTH, expect `market_status: "closed"` and the same loading-then-ready pattern while background bootstrap runs. `WatchConfluence` also pushes scored updates when background fetch completes.
 
 **grpcurl examples (plaintext local mode)**
 

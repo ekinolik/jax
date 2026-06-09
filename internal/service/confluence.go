@@ -14,7 +14,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const defaultGetConfluenceTimeout = 90 * time.Second
+// defaultGetConfluenceTimeout bounds subscribe + live-field refresh only; OI/bootstrap runs in background.
+const defaultGetConfluenceTimeout = 15 * time.Second
+
+// defaultOIWaitBudget is how long a unary handler may wait when background OI/bootstrap is in flight.
+const defaultOIWaitBudget = 90 * time.Second
 
 // ConfluenceProcessor is the subset of the confluence processor used by gRPC handlers.
 type ConfluenceProcessor interface {
@@ -22,6 +26,9 @@ type ConfluenceProcessor interface {
 	Watch(ctx context.Context, ticker string) (<-chan *pkgconfluence.ConfluenceSnapshot, func(), error)
 	OnSubscribe(ctx context.Context, ticker string, now time.Time) error
 	OnUnsubscribe(ticker string)
+	StopBackgroundWarmup(ticker string)
+	BootstrapInProgress(ticker string) bool
+	RecomputeIfReady(ctx context.Context, ticker string) (*pkgconfluence.ConfluenceSnapshot, bool)
 	BootstrapSnapshot(ctx context.Context, ticker string) (*pkgconfluence.ConfluenceSnapshot, error)
 	RefreshSnapshotLive(ctx context.Context, ticker string) (*pkgconfluence.ConfluenceSnapshot, error)
 }
@@ -29,15 +36,17 @@ type ConfluenceProcessor interface {
 // ConfluenceService serves ConfluenceService gRPC requests.
 type ConfluenceService struct {
 	confluencev1.UnimplementedConfluenceServiceServer
-	processor ConfluenceProcessor
-	timeout   time.Duration
+	processor    ConfluenceProcessor
+	timeout      time.Duration
+	oiWaitBudget time.Duration
 }
 
 // NewConfluenceService creates a ConfluenceService backed by the given processor.
 func NewConfluenceService(processor ConfluenceProcessor) *ConfluenceService {
 	return &ConfluenceService{
-		processor: processor,
-		timeout:   defaultGetConfluenceTimeout,
+		processor:    processor,
+		timeout:      defaultGetConfluenceTimeout,
+		oiWaitBudget: defaultOIWaitBudget,
 	}
 }
 
@@ -90,17 +99,45 @@ func (s *ConfluenceService) fetchSnapshot(ctx context.Context, rawTicker, method
 		return s.refreshLiveSnapshot(handlerCtx, ticker, method, snap)
 	}
 
-	if snap, err := s.processor.BootstrapSnapshot(handlerCtx, ticker); err == nil && snap != nil && !intconfluence.SnapshotNeedsBootstrap(snap) {
-		return s.refreshLiveSnapshot(handlerCtx, ticker, method, snap)
-	} else if err != nil {
-		log.Printf("[confluence] %s bootstrap %s: %v", method, ticker, err)
+	snap, ok := s.processor.GetSnapshot(ticker)
+	if !ok || snap == nil {
+		return nil, status.Errorf(codes.Unavailable, "no snapshot for %s after subscribe", ticker)
 	}
 
-	snap, err := waitForReadySnapshot(handlerCtx, s.processor, ticker, s.timeout)
-	if err != nil {
-		return nil, err
+	// Hybrid wait: return immediately when bootstrap is idle; poll up to oiWaitBudget while background OI runs.
+	if intconfluence.SnapshotNeedsBootstrap(snap) && s.processor.BootstrapInProgress(ticker) {
+		waitCtx, waitCancel := context.WithTimeout(ctx, s.oiWaitBudget)
+		defer waitCancel()
+		if ready := s.waitForScoredSnapshot(waitCtx, ticker); ready != nil {
+			snap = ready
+		}
+	} else if intconfluence.SnapshotNeedsBootstrap(snap) {
+		if ready, ok := s.processor.RecomputeIfReady(handlerCtx, ticker); ok {
+			snap = ready
+		}
 	}
+
 	return s.refreshLiveSnapshot(handlerCtx, ticker, method, snap)
+}
+
+func (s *ConfluenceService) waitForScoredSnapshot(ctx context.Context, ticker string) *pkgconfluence.ConfluenceSnapshot {
+	const pollInterval = 100 * time.Millisecond
+	for {
+		if ready, ok := s.processor.RecomputeIfReady(ctx, ticker); ok {
+			return ready
+		}
+		if snap, ok := s.processor.GetSnapshot(ticker); ok && snap != nil && !intconfluence.SnapshotNeedsBootstrap(snap) {
+			return snap
+		}
+		select {
+		case <-ctx.Done():
+			if snap, ok := s.processor.GetSnapshot(ticker); ok {
+				return snap
+			}
+			return nil
+		case <-time.After(pollInterval):
+		}
+	}
 }
 
 func (s *ConfluenceService) refreshLiveSnapshot(
@@ -151,30 +188,6 @@ func (s *ConfluenceService) WatchConfluence(req *confluencev1.WatchConfluenceReq
 	}
 }
 
-func waitForReadySnapshot(ctx context.Context, processor ConfluenceProcessor, ticker string, timeout time.Duration) (*pkgconfluence.ConfluenceSnapshot, error) {
-	ticker = pkgconfluence.NormalizeTicker(ticker)
-	tickerWait := time.NewTicker(100 * time.Millisecond)
-	defer tickerWait.Stop()
-
-	for {
-		if snap, ok := processor.GetSnapshot(ticker); ok && snap != nil && !intconfluence.SnapshotNeedsBootstrap(snap) {
-			return snap, nil
-		}
-		select {
-		case <-ctx.Done():
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return nil, status.Errorf(
-					codes.DeadlineExceeded,
-					"no scored confluence snapshot for %s within %s; bootstrap may have failed or data is unavailable",
-					ticker,
-					timeout,
-				)
-			}
-			return nil, status.Errorf(codes.Canceled, "request canceled while waiting for %s snapshot", ticker)
-		case <-tickerWait.C:
-		}
-	}
-}
 
 func mapConfluenceError(err error) error {
 	if err == nil {

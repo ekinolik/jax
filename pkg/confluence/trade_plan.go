@@ -121,6 +121,10 @@ func BuildTradePlan(snap ConfluenceSnapshot, cfg TradePlanConfig) *TradePlan {
 		SpotContext:           spotCtx,
 		GEXDEXGapPct:          gexDexGap,
 	}
+	if snap.ReadinessBand == ReadinessCaution && snap.RiskReward > 0 && snap.RiskReward < 1 {
+		plan.IntradayNotes = append(plan.IntradayNotes,
+			"Single entry recommended — poor R/R; add ladder shown for transparency")
+	}
 	enrichTradePlanDisplay(plan)
 	return plan
 }
@@ -370,10 +374,10 @@ func dedupeStops(stops []StopLevel) []StopLevel {
 
 func buildAverageDown(anchor, hardStop, clusterFloor float64, useClusterFloor bool, anchorSource string, stacked bool, levels Levels, cfg TradePlanConfig) ([]AddLevel, float64) {
 	adds := []AddLevel{{
-		Tier:      "starter",
+		Tier:      "initial_entry",
 		Price:     anchor,
 		SizeHint:  "small",
-		Condition: starterCondition(anchorSource),
+		Condition: initialEntryCondition(anchorSource),
 	}}
 
 	exitBelow := hardStop
@@ -385,18 +389,13 @@ func buildAverageDown(anchor, hardStop, clusterFloor float64, useClusterFloor bo
 
 	mid := supportsBetween(levels, anchor, addFloor)
 	if len(mid) >= 1 && addFloor > 0 {
-		s := mid[0]
-		cond := fmt.Sprintf("Add only if still above exit level %.2f and reclaims %.0f", exitBelow, s.Price)
-		if useClusterFloor {
-			cond = fmt.Sprintf("Add only if cluster floor %.0f holds and reclaims %.0f", clusterFloor, s.Price)
+		adds = append(adds, buildAdd1Level(mid[0].Price, clusterFloor, useClusterFloor, exitBelow))
+	} else if useClusterFloor && clusterFloor > 0 && addFloor > 0 {
+		minGap := anchor * cfg.MinAddGapPct
+		if anchor-clusterFloor >= minGap {
+			synth := roundPrice((anchor + clusterFloor) / 2)
+			adds = append(adds, buildAdd1Level(synth, clusterFloor, true, exitBelow))
 		}
-		adds = append(adds, AddLevel{
-			Tier:      "add_1",
-			Price:     s.Price,
-			SizeHint:  "small",
-			Condition: cond,
-			IfBelow:   "exit_instead",
-		})
 	}
 	if stacked && len(mid) >= 2 && addFloor > 0 {
 		s := mid[1]
@@ -411,14 +410,28 @@ func buildAverageDown(anchor, hardStop, clusterFloor float64, useClusterFloor bo
 	return adds, exitBelow
 }
 
-func starterCondition(source string) string {
+func buildAdd1Level(price, clusterFloor float64, useClusterFloor bool, exitBelow float64) AddLevel {
+	cond := fmt.Sprintf("Add only if still above exit level %.2f and reclaims %.0f", exitBelow, price)
+	if useClusterFloor {
+		cond = fmt.Sprintf("Add only if cluster floor %.0f holds and reclaims %.0f", clusterFloor, price)
+	}
+	return AddLevel{
+		Tier:      "add_1",
+		Price:     price,
+		SizeHint:  "small",
+		Condition: cond,
+		IfBelow:   "exit_instead",
+	}
+}
+
+func initialEntryCondition(source string) string {
 	switch source {
 	case "gex_support":
-		return "Buy/average-in at rank-1 GEX support (ideal entry)"
+		return "Initial entry at rank-1 GEX support (ideal entry)"
 	case "put_wall":
-		return "Buy/average-in at put wall support"
+		return "Initial entry at put wall support"
 	default:
-		return "Buy/average-in at nearest support when readiness ≥ possible_entry"
+		return "Initial entry at nearest support when readiness ≥ possible_entry"
 	}
 }
 

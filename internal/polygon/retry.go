@@ -11,6 +11,9 @@ import (
 	"github.com/massive-com/client-go/v2/rest/models"
 )
 
+// ErrRateLimited indicates Massive returned HTTP 429.
+var ErrRateLimited = errors.New("massive API rate limited")
+
 // RetryConfig controls exponential backoff for Massive REST calls used by confluence.
 type RetryConfig struct {
 	MaxRetries  int
@@ -35,9 +38,30 @@ func (c RetryConfig) normalized() RetryConfig {
 	return c
 }
 
+// IsRateLimitError reports whether err is a Massive HTTP 429.
+func IsRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrRateLimited) {
+		return true
+	}
+	var apiErr *models.ErrorResponse
+	if errors.As(err, &apiErr) && apiErr.StatusCode == 429 {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "429") || strings.Contains(msg, "too many requests")
+}
+
 // IsRetryableAPIError reports whether err is a transient Massive REST failure (429 or 5xx).
+// Context cancellation, deadlines, and client timeouts are not retried — fail fast so handlers
+// and shutdown can unwind instead of multiplying wait time via backoff.
 func IsRetryableAPIError(err error) bool {
 	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	var apiErr *models.ErrorResponse
@@ -46,6 +70,9 @@ func IsRetryableAPIError(err error) bool {
 	}
 
 	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "context canceled") || strings.Contains(msg, "context deadline exceeded") {
+		return false
+	}
 	if strings.Contains(msg, "429") || strings.Contains(msg, "too many requests") {
 		return true
 	}
@@ -54,7 +81,10 @@ func IsRetryableAPIError(err error) bool {
 	}
 
 	var netErr net.Error
-	return errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return false
+	}
+	return errors.As(err, &netErr) && netErr.Temporary()
 }
 
 // WithRetry executes fn with exponential backoff on retryable API errors.
@@ -77,6 +107,9 @@ func WithRetry(ctx context.Context, cfg RetryConfig, fn func(context.Context) er
 		if attempt == cfg.MaxRetries {
 			break
 		}
+		if IsRateLimitError(lastErr) {
+			delay = maxDuration(delay, 2*time.Second)
+		}
 
 		select {
 		case <-ctx.Done():
@@ -85,5 +118,15 @@ func WithRetry(ctx context.Context, cfg RetryConfig, fn func(context.Context) er
 		}
 		delay *= 2
 	}
+	if IsRateLimitError(lastErr) {
+		return fmt.Errorf("%w: retry exhausted after %d attempts", ErrRateLimited, cfg.MaxRetries+1)
+	}
 	return fmt.Errorf("retry exhausted after %d attempts: %w", cfg.MaxRetries+1, lastErr)
+}
+
+func maxDuration(a, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
 }

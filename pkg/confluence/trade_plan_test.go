@@ -54,7 +54,7 @@ func TestBuildTradePlan_NETStyleLadder(t *testing.T) {
 	assert.InDelta(t, 237.6, plan.ExitInsteadOfAddBelow, 0.01)
 
 	require.Len(t, plan.AverageDown, 2)
-	assert.Equal(t, "starter", plan.AverageDown[0].Tier)
+	assert.Equal(t, "initial_entry", plan.AverageDown[0].Tier)
 	assert.InDelta(t, 245.0, plan.AverageDown[0].Price, 0.01)
 	assert.Equal(t, "add_1", plan.AverageDown[1].Tier)
 	assert.InDelta(t, 240.0, plan.AverageDown[1].Price, 0.01)
@@ -98,9 +98,90 @@ func TestBuildTradePlan_singleSupportNoAdd1(t *testing.T) {
 	plan := confluence.BuildTradePlan(snap, confluence.DefaultTradePlanConfig())
 	require.NotNil(t, plan)
 	require.Len(t, plan.AverageDown, 1)
-	assert.Equal(t, "starter", plan.AverageDown[0].Tier)
+	assert.Equal(t, "initial_entry", plan.AverageDown[0].Tier)
 	assert.InDelta(t, 97.51, findStop(plan.Stops, "soft_stop").Price, 0.01)
 	assert.Zero(t, plan.ExitInsteadOfAddBelow)
+}
+
+func sndkStyleSnapshot(spot float64) confluence.ConfluenceSnapshot {
+	return confluence.ConfluenceSnapshot{
+		Ticker:          "SNDK",
+		Spot:            spot,
+		ReadinessBand:   confluence.ReadinessPossibleEntry,
+		DistanceToEntry: confluence.EntryIdeal,
+		Levels: confluence.Levels{
+			Support: []confluence.Level{
+				{Price: 1600.0, Source: confluence.LevelSourceGEX, Rank: 1},
+				{Price: 1580.0, Source: confluence.LevelSourceGEX, Rank: 2},
+				{Price: 1450.0, Source: confluence.LevelSourceDEX, Rank: 3},
+			},
+			NearestSupport:    1600.0,
+			HasNearestSupport: true,
+		},
+	}
+}
+
+func TestBuildTradePlan_SNDKStyleSyntheticAdd1(t *testing.T) {
+	snap := sndkStyleSnapshot(1610.0)
+	cfg := confluence.DefaultTradePlanConfig()
+
+	plan := confluence.BuildTradePlan(snap, cfg)
+	require.NotNil(t, plan)
+
+	assert.InDelta(t, 1600.0, plan.EntryZone.Price, 0.01)
+
+	cluster := findStop(plan.Stops, "cluster_floor")
+	require.NotNil(t, cluster, "expected cluster_floor stop")
+	assert.InDelta(t, 1580.0, cluster.Price, 0.01)
+
+	structStop := findStop(plan.Stops, "structure_stop")
+	require.NotNil(t, structStop)
+	assert.InDelta(t, 1450.0, structStop.Price, 0.01)
+
+	assert.InDelta(t, 1572.1, plan.ExitInsteadOfAddBelow, 0.01)
+	assert.InDelta(t, 0.094, plan.GEXDEXGapPct, 0.002)
+
+	require.Len(t, plan.AverageDown, 2)
+	assert.Equal(t, "initial_entry", plan.AverageDown[0].Tier)
+	assert.InDelta(t, 1600.0, plan.AverageDown[0].Price, 0.01)
+	assert.Contains(t, plan.AverageDown[0].Condition, "Initial entry at rank-1 GEX")
+
+	assert.Equal(t, "add_1", plan.AverageDown[1].Tier)
+	assert.InDelta(t, 1590.0, plan.AverageDown[1].Price, 0.01)
+	assert.Equal(t, "exit_instead", plan.AverageDown[1].IfBelow)
+	assert.Contains(t, plan.AverageDown[1].Condition, "cluster floor 1580 holds and reclaims 1590")
+
+	line := confluence.TradePlanReasonLine(plan)
+	assert.Contains(t, line, "Enter ~1600")
+	assert.Contains(t, line, "exit day trade if cluster fails ~1580")
+	assert.Contains(t, line, "add at 1590 only if 1580 holds and reclaims 1590")
+}
+
+func TestBuildTradePlan_clusterGapTooSmallNoSyntheticAdd1(t *testing.T) {
+	snap := confluence.ConfluenceSnapshot{
+		Spot:            101.0,
+		ReadinessBand:   confluence.ReadinessPossibleEntry,
+		DistanceToEntry: confluence.EntryIdeal,
+		Levels: confluence.Levels{
+			Support: []confluence.Level{
+				{Price: 100.0, Source: confluence.LevelSourceGEX, Rank: 1},
+				{Price: 99.5, Source: confluence.LevelSourceGEX, Rank: 2},
+				{Price: 90.0, Source: confluence.LevelSourceDEX, Rank: 3},
+			},
+			NearestSupport:    100.0,
+			HasNearestSupport: true,
+		},
+	}
+
+	plan := confluence.BuildTradePlan(snap, confluence.DefaultTradePlanConfig())
+	require.NotNil(t, plan)
+
+	cluster := findStop(plan.Stops, "cluster_floor")
+	require.NotNil(t, cluster)
+	assert.InDelta(t, 99.5, cluster.Price, 0.01)
+
+	require.Len(t, plan.AverageDown, 1, "gap below min_add_gap_pct should not emit synthetic add_1")
+	assert.Equal(t, "initial_entry", plan.AverageDown[0].Tier)
 }
 
 func TestBuildTradePlan_cautionIncludesNote(t *testing.T) {
@@ -109,6 +190,15 @@ func TestBuildTradePlan_cautionIncludesNote(t *testing.T) {
 	require.NotNil(t, plan)
 	assert.Equal(t, "setup not fully confirmed", plan.EntryZone.Note)
 	assert.Contains(t, plan.SpotContext.Guidance, "caution")
+}
+
+func TestBuildTradePlan_cautionPoorRRIntradayNote(t *testing.T) {
+	snap := netStyleSnapshot(confluence.ReadinessCaution, 246.0)
+	snap.RiskReward = 0.6
+	plan := confluence.BuildTradePlan(snap, confluence.DefaultTradePlanConfig())
+	require.NotNil(t, plan)
+	require.Len(t, plan.IntradayNotes, 1)
+	assert.Contains(t, plan.IntradayNotes[0], "Single entry recommended")
 }
 
 func TestTradePlanReasonLine(t *testing.T) {

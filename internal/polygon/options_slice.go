@@ -10,7 +10,10 @@ import (
 	"github.com/massive-com/client-go/v2/rest/models"
 )
 
-const maxOptionContracts = 2000
+const (
+	maxOptionContracts = 2000
+	optionsPageLimit   = 250 // Massive /v3/snapshot/options max per page; default SDK 10 causes excessive pagination
+)
 
 // GetOptionSlice fetches a filtered options chain snapshot and returns a reduced OptionSlice.
 func (c *Client) GetOptionSlice(
@@ -29,24 +32,38 @@ func (c *Client) GetOptionSlice(
 	}
 
 	exp := models.Date(expDate)
+	pageLimit := optionsPageLimit
 	params := models.ListOptionsChainParams{
 		UnderlyingAsset:  ticker,
 		StrikePriceGTE:   &strikeLow,
 		StrikePriceLTE:   &strikeHigh,
 		ExpirationDateEQ: &exp,
+		Limit:            &pageLimit,
 	}
 
 	var snapshots []models.OptionContractSnapshot
 	err = WithRetry(ctx, c.retry, func(callCtx context.Context) error {
 		iter := c.client.ListOptionsChainSnapshot(callCtx, &params)
 		snapshots = snapshots[:0]
-		for iter.Next() {
+		for {
+			if err := callCtx.Err(); err != nil {
+				return err
+			}
+			if !iter.Next() {
+				break
+			}
+			if err := callCtx.Err(); err != nil {
+				return err
+			}
 			snapshots = append(snapshots, iter.Item())
 			if len(snapshots) > maxOptionContracts {
 				return fmt.Errorf("option chain snapshot exceeded %d contracts", maxOptionContracts)
 			}
 		}
 		if iterErr := iter.Err(); iterErr != nil {
+			if IsRateLimitError(iterErr) {
+				return fmt.Errorf("%w: %v", ErrRateLimited, iterErr)
+			}
 			return fmt.Errorf("massive option chain snapshot error: %w", iterErr)
 		}
 		return nil

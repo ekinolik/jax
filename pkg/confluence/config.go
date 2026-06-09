@@ -57,6 +57,7 @@ type TradePlanConfig struct {
 	ClusterBandPct      float64 `yaml:"cluster_band_pct"`
 	GEXDEXGapWarnPct    float64 `yaml:"gex_dex_gap_warn_pct"`
 	ClusterDEXMinGapPct float64 `yaml:"cluster_dex_min_gap_pct"`
+	MinAddGapPct        float64 `yaml:"min_add_gap_pct"`
 }
 
 // ScoringConfig holds v2 scoring thresholds and gates.
@@ -193,6 +194,9 @@ func (c *TradePlanConfig) applyDefaults() {
 	}
 	if c.ClusterDEXMinGapPct == 0 {
 		c.ClusterDEXMinGapPct = 0.02
+	}
+	if c.MinAddGapPct == 0 {
+		c.MinAddGapPct = 0.01
 	}
 }
 

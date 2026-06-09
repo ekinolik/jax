@@ -26,8 +26,13 @@ type Client struct {
 }
 
 func NewClient(cfg *config.Config) *Client {
+	mc := massive.New(cfg.PolygonAPIKey)
+	// Disable resty internal retries; confluence uses WithRetry with ctx-aware backoff.
+	mc.HTTP.SetRetryCount(0)
+	mc.HTTP.SetTimeout(25 * time.Second)
+
 	return &Client{
-		client: massive.New(cfg.PolygonAPIKey),
+		client: mc,
 		retry:  DefaultRetryConfig(),
 	}
 }

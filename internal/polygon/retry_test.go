@@ -22,6 +22,9 @@ func TestIsRetryableAPIError(t *testing.T) {
 		{"500", &models.ErrorResponse{StatusCode: 500}, true},
 		{"404", &models.ErrorResponse{StatusCode: 404}, false},
 		{"message429", errors.New("bad status with code '429'"), true},
+		{"context deadline", context.DeadlineExceeded, false},
+		{"context canceled", context.Canceled, false},
+		{"client timeout", &timeoutError{}, false},
 		{"permanent", errors.New("invalid ticker"), false},
 	}
 	for _, tt := range tests {
@@ -70,3 +73,33 @@ func TestWithRetry_respectsContextCancel(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 }
+
+func TestWithRetry_doesNotRetryClientTimeout(t *testing.T) {
+	attempts := 0
+	err := polygon.WithRetry(context.Background(), polygon.RetryConfig{
+		MaxRetries:  5,
+		BaseDelayMs: 1,
+	}, func(context.Context) error {
+		attempts++
+		return &timeoutError{}
+	})
+	require.Error(t, err)
+	assert.Equal(t, 1, attempts)
+}
+
+func TestWithRetry_rateLimitExhausted(t *testing.T) {
+	err := polygon.WithRetry(context.Background(), polygon.RetryConfig{
+		MaxRetries:  1,
+		BaseDelayMs: 1,
+	}, func(context.Context) error {
+		return &models.ErrorResponse{StatusCode: 429, BaseResponse: models.BaseResponse{ErrorMessage: "rate limited"}}
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, polygon.ErrRateLimited)
+}
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "context deadline exceeded (Client.Timeout exceeded while awaiting headers)" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }

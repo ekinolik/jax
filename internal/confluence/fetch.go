@@ -3,6 +3,7 @@ package confluence
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"time"
 
@@ -11,7 +12,23 @@ import (
 	"github.com/massive-com/client-go/v2/rest/models"
 )
 
-const defaultStrikeBand = 0.15
+const (
+	defaultStrikeBand = 0.15
+	apiCallTimeout    = 30 * time.Second
+)
+
+// withAPITimeout bounds a single Massive REST call; honors a sooner parent deadline.
+func withAPITimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining > 0 && remaining < apiCallTimeout {
+			return context.WithTimeout(ctx, remaining)
+		}
+	}
+	return context.WithTimeout(ctx, apiCallTimeout)
+}
 
 // DayStats holds session open/high/low/volume/VWAP for a symbol.
 type DayStats struct {
@@ -86,7 +103,9 @@ func FetchOptionSlice(
 		}
 	}
 
-	greeksSlice, err := client.GetOptionSlice(ctx, ticker, expiration, strikeLow, strikeHigh, false, monthlyWeight, weeklyWeight)
+	greeksCtx, greeksCancel := withAPITimeout(ctx)
+	greeksSlice, err := client.GetOptionSlice(greeksCtx, ticker, expiration, strikeLow, strikeHigh, false, monthlyWeight, weeklyWeight)
+	greeksCancel()
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +114,9 @@ func FetchOptionSlice(
 		return MergeSliceOI(greeksSlice, cachedOI), nil
 	}
 
-	oiSlice, err := client.GetOptionSlice(ctx, ticker, expiration, strikeLow, strikeHigh, true, monthlyWeight, weeklyWeight)
+	oiCtx, oiCancel := withAPITimeout(ctx)
+	oiSlice, err := client.GetOptionSlice(oiCtx, ticker, expiration, strikeLow, strikeHigh, true, monthlyWeight, weeklyWeight)
+	oiCancel()
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +126,41 @@ func FetchOptionSlice(
 		}
 	}
 	return oiSlice, nil
+}
+
+// FetchOISliceWithRetry fetches and caches OI with per-request timeouts and API retries.
+func FetchOISliceWithRetry(
+	ctx context.Context,
+	client *polygon.Client,
+	oiCache *OICache,
+	settings *pkgconfluence.Settings,
+	retry polygon.RetryConfig,
+	ticker, expiration string,
+	marketDate time.Time,
+	strikeLow, strikeHigh float64,
+) (*pkgconfluence.OptionSlice, error) {
+	if oiCache != nil && oiCache.HasOI(ticker, marketDate, expiration) {
+		return oiCache.LoadOI(ticker, marketDate, expiration)
+	}
+
+	var slice *pkgconfluence.OptionSlice
+	err := polygon.WithRetry(ctx, retry, func(callCtx context.Context) error {
+		fetchCtx, cancel := withAPITimeout(callCtx)
+		defer cancel()
+		var fetchErr error
+		slice, fetchErr = FetchOISlice(fetchCtx, client, oiCache, settings, ticker, expiration, marketDate, strikeLow, strikeHigh)
+		if fetchErr != nil {
+			if polygon.IsRateLimitError(fetchErr) {
+				log.Printf("[confluence] OI slice %s %s: Massive rate limit (429), retrying", ticker, expiration)
+			}
+			return fetchErr
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return slice, nil
 }
 
 // FetchOISlice fetches and caches OI only (no greeks) for prefetch or background OI load.
@@ -121,8 +177,10 @@ func FetchOISlice(
 		return oiCache.LoadOI(ticker, marketDate, expiration)
 	}
 
-	oiSlice, err := client.GetOptionSlice(ctx, ticker, expiration, strikeLow, strikeHigh, true,
+	callCtx, cancel := withAPITimeout(ctx)
+	oiSlice, err := client.GetOptionSlice(callCtx, ticker, expiration, strikeLow, strikeHigh, true,
 		settings.MonthlyExpiryWeight, settings.WeeklyExpiryWeight)
+	cancel()
 	if err != nil {
 		return nil, err
 	}

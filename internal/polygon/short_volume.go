@@ -8,10 +8,23 @@ import (
 	"github.com/massive-com/client-go/v2/rest/models"
 )
 
+const listShortVolumePath = "/stocks/v1/short-volume"
+
 // ShortVolumeData holds prior-session short volume ratio.
 type ShortVolumeData struct {
 	ShortVolumeRatio float64
 	Date             time.Time
+}
+
+// shortVolumeRow decodes only fields we use. The Massive API may return volume
+// counts as floats (e.g. 4796249.0); the SDK ShortVolume type uses *int64 and fails.
+type shortVolumeRow struct {
+	Date             *string  `json:"date,omitempty"`
+	ShortVolumeRatio *float64 `json:"short_volume_ratio,omitempty"`
+}
+
+type listShortVolumeAPIResponse struct {
+	Results []shortVolumeRow `json:"results,omitempty"`
 }
 
 // GetShortVolumeRatio fetches the most recent short volume ratio for a ticker.
@@ -21,18 +34,13 @@ func (c *Client) GetShortVolumeRatio(ctx context.Context, ticker string) (*Short
 		WithOrder(models.Desc).
 		WithLimit(1)
 
-	var item models.ShortVolume
+	var resp listShortVolumeAPIResponse
 	err := WithRetry(ctx, c.retry, func(callCtx context.Context) error {
-		iter := c.client.ListShortVolume(callCtx, params)
-		if !iter.Next() {
-			if iterErr := iter.Err(); iterErr != nil {
-				return fmt.Errorf("massive short volume API error: %w", iterErr)
-			}
-			return fmt.Errorf("no short volume data for %s", ticker)
+		if err := c.client.Call(callCtx, "GET", listShortVolumePath, params, &resp); err != nil {
+			return fmt.Errorf("massive short volume API error: %w", err)
 		}
-		item = iter.Item()
-		if iterErr := iter.Err(); iterErr != nil {
-			return fmt.Errorf("massive short volume API error: %w", iterErr)
+		if len(resp.Results) == 0 {
+			return fmt.Errorf("no short volume data for %s", ticker)
 		}
 		return nil
 	})
@@ -40,6 +48,7 @@ func (c *Client) GetShortVolumeRatio(ctx context.Context, ticker string) (*Short
 		return nil, err
 	}
 
+	item := resp.Results[0]
 	out := &ShortVolumeData{}
 	if item.ShortVolumeRatio != nil {
 		out.ShortVolumeRatio = *item.ShortVolumeRatio

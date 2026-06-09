@@ -69,3 +69,5 @@ trade_plan:
   dex_stop_buffer_pct: 0.010
   cluster_band_pct: 0.02
   gex_dex_gap_warn_pct: 0.05
+  cluster_dex_min_gap_pct: 0.02
+  min_add_gap_pct: 0.01

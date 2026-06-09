@@ -7,10 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ekinolik/jax/internal/polygon"
 	pkgconfluence "github.com/ekinolik/jax/pkg/confluence"
 )
-
-const bootstrapTimeout = 90 * time.Second
 
 // SnapshotNeedsBootstrap reports whether a cached snapshot lacks a scored level ladder.
 func SnapshotNeedsBootstrap(snap *pkgconfluence.ConfluenceSnapshot) bool {
@@ -44,6 +43,9 @@ func (p *Processor) BootstrapSnapshot(ctx context.Context, ticker string) (*pkgc
 		return nil, fmt.Errorf("polygon client not configured")
 	}
 
+	mergedCtx, cancel := p.mergeContexts(ctx, p.ctx)
+	defer cancel()
+
 	lock := p.bootstrapLock(ticker)
 	lock.Lock()
 	defer lock.Unlock()
@@ -52,7 +54,7 @@ func (p *Processor) BootstrapSnapshot(ctx context.Context, ticker string) (*pkgc
 		return snap, nil
 	}
 
-	snap, err := p.runBootstrapFetch(ctx, ticker)
+	snap, err := p.runBootstrapFetch(mergedCtx, ticker)
 	if err != nil {
 		return nil, err
 	}
@@ -100,9 +102,18 @@ func (p *Processor) runBootstrapFetch(ctx context.Context, ticker string) (*pkgc
 
 	var slices []pkgconfluence.OptionSlice
 	for _, exp := range expirations {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		expStr := exp.Format("2006-01-02")
 		slice, err := FetchOptionSlice(ctx, p.client, p.oiCache, p.settings, ticker, expStr, marketDate, strikeLow, strikeHigh)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if polygon.IsRateLimitError(err) {
+				log.Printf("[confluence] bootstrap %s %s: Massive rate limit (429)", ticker, expStr)
+			}
 			return nil, fmt.Errorf("option slice %s %s: %w", ticker, expStr, err)
 		}
 		slices = append(slices, *slice)
@@ -262,12 +273,9 @@ func (p *Processor) bootstrapWatchlistIfClosed() {
 		if err := pkgconfluence.ValidateTicker(ticker); err != nil {
 			continue
 		}
-		ctx, cancel := context.WithTimeout(parent, bootstrapTimeout)
-		if _, err := p.BootstrapSnapshot(ctx, ticker); err != nil {
+		if _, err := p.runBootstrapFetch(parent, ticker); err != nil {
 			log.Printf("[confluence] bootstrap prefetch %s: %v", ticker, err)
-			cancel()
 			continue
 		}
-		cancel()
 	}
 }

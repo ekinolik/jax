@@ -31,7 +31,13 @@ func (c *Client) listExpirationDates(ctx context.Context, ticker string) ([]time
 		iter := c.client.ListOptionsContracts(callCtx, params)
 		seen := make(map[int64]struct{})
 		dates = dates[:0]
-		for iter.Next() {
+		for {
+			if err := callCtx.Err(); err != nil {
+				return err
+			}
+			if !iter.Next() {
+				break
+			}
 			contract := iter.Item()
 			d := confluence.DateOnly(time.Time(contract.ExpirationDate))
 			if _, ok := seen[d.Unix()]; ok {

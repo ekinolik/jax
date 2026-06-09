@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,11 +32,32 @@ func (m *mockConfluenceProcessor) GetSnapshot(ticker string) (*pkgconfluence.Con
 
 func (m *mockConfluenceProcessor) OnSubscribe(ctx context.Context, ticker string, now time.Time) error {
 	m.subscribeCount++
-	return m.onSubErr
+	if m.onSubErr != nil {
+		return m.onSubErr
+	}
+	ticker = pkgconfluence.NormalizeTicker(ticker)
+	if _, ok := m.snapshots[ticker]; !ok {
+		m.snapshots[ticker] = &pkgconfluence.ConfluenceSnapshot{
+			Ticker:    ticker,
+			OIStatus:  pkgconfluence.OIStatusLoading,
+			UpdatedAt: now,
+		}
+	}
+	return nil
 }
 
 func (m *mockConfluenceProcessor) OnUnsubscribe(ticker string) {
 	m.unsubscribeCount++
+}
+
+func (m *mockConfluenceProcessor) StopBackgroundWarmup(ticker string) {}
+
+func (m *mockConfluenceProcessor) BootstrapInProgress(ticker string) bool {
+	return false
+}
+
+func (m *mockConfluenceProcessor) RecomputeIfReady(context.Context, string) (*pkgconfluence.ConfluenceSnapshot, bool) {
+	return nil, false
 }
 
 func (m *mockConfluenceProcessor) BootstrapSnapshot(ctx context.Context, ticker string) (*pkgconfluence.ConfluenceSnapshot, error) {
@@ -43,7 +65,7 @@ func (m *mockConfluenceProcessor) BootstrapSnapshot(ctx context.Context, ticker 
 		return nil, m.bootstrapErr
 	}
 	ticker = pkgconfluence.NormalizeTicker(ticker)
-	if snap, ok := m.snapshots[ticker]; ok {
+	if snap, ok := m.snapshots[ticker]; ok && snap != nil && snap.OIStatus == pkgconfluence.OIStatusReady && snap.Levels.GammaFlip > 0 {
 		return snap, nil
 	}
 	return nil, context.DeadlineExceeded
@@ -166,17 +188,118 @@ func TestGetConfluence_invalidTicker(t *testing.T) {
 	}
 }
 
-func TestGetConfluence_waitTimeout(t *testing.T) {
+func TestGetConfluence_coldStartReturnsWithinTimeout(t *testing.T) {
 	proc := &mockConfluenceProcessor{snapshots: map[string]*pkgconfluence.ConfluenceSnapshot{}}
 	svc := NewConfluenceService(proc)
 	svc.timeout = 200 * time.Millisecond
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
+	start := time.Now()
+	resp, err := svc.GetConfluence(context.Background(), &confluencev1.GetConfluenceRequest{Ticker: "NVDA"})
+	if err != nil {
+		t.Fatalf("GetConfluence: %v", err)
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("expected response within handler timeout, took %s", time.Since(start))
+	}
+	if resp.Ticker != "NVDA" {
+		t.Fatalf("ticker: got %q", resp.Ticker)
+	}
+	if proc.subscribeCount != 1 || proc.unsubscribeCount != 1 {
+		t.Errorf("subscribe balance: sub=%d unsub=%d", proc.subscribeCount, proc.unsubscribeCount)
+	}
+}
 
-	_, err := svc.GetConfluence(ctx, &confluencev1.GetConfluenceRequest{Ticker: "NVDA"})
-	if status.Code(err) != codes.DeadlineExceeded {
-		t.Fatalf("expected DeadlineExceeded, got %v", err)
+func TestGetConfluence_tickerBNotBlockedByTickerA(t *testing.T) {
+	blockSPY := make(chan struct{})
+	proc := &blockingSubscribeProcessor{
+		mockConfluenceProcessor: mockConfluenceProcessor{
+			snapshots: map[string]*pkgconfluence.ConfluenceSnapshot{},
+		},
+		blockTicker: "SPY",
+		blockCh:     blockSPY,
+	}
+	svc := NewConfluenceService(proc)
+	svc.timeout = 2 * time.Second
+
+	go func() {
+		_, _ = svc.GetConfluence(context.Background(), &confluencev1.GetConfluenceRequest{Ticker: "SPY"})
+		close(blockSPY)
+	}()
+
+	deadline := time.After(2 * time.Second)
+	for proc.spySubscribeCount() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("SPY subscribe did not start")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	start := time.Now()
+	resp, err := svc.GetConfluence(context.Background(), &confluencev1.GetConfluenceRequest{Ticker: "NVDA"})
+	if err != nil {
+		t.Fatalf("GetConfluence NVDA: %v", err)
+	}
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("NVDA query blocked for %s while SPY subscribe was in flight", time.Since(start))
+	}
+	if resp.Ticker != "NVDA" || resp.OiStatus != string(pkgconfluence.OIStatusLoading) {
+		t.Fatalf("NVDA response: %+v", resp)
+	}
+}
+
+type blockingSubscribeProcessor struct {
+	mockConfluenceProcessor
+	blockTicker string
+	blockCh     chan struct{}
+	spySubs     int
+	mu          sync.Mutex
+}
+
+func (b *blockingSubscribeProcessor) spySubscribeCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.spySubs
+}
+
+func (b *blockingSubscribeProcessor) OnSubscribe(ctx context.Context, ticker string, now time.Time) error {
+	ticker = pkgconfluence.NormalizeTicker(ticker)
+	if ticker == b.blockTicker {
+		b.mu.Lock()
+		b.spySubs++
+		b.mu.Unlock()
+		select {
+		case <-b.blockCh:
+		case <-ctx.Done():
+		}
+	}
+	return b.mockConfluenceProcessor.OnSubscribe(ctx, ticker, now)
+}
+
+func TestGetConfluence_coldStartReturnsLoadingSnapshot(t *testing.T) {
+	proc := &mockConfluenceProcessor{
+		snapshots: map[string]*pkgconfluence.ConfluenceSnapshot{
+			"SPY": {
+				Ticker:       "SPY",
+				Spot:         500,
+				OIStatus:     pkgconfluence.OIStatusLoading,
+				MarketStatus: pkgconfluence.MarketStatusOpen,
+				UpdatedAt:    time.Now().UTC(),
+			},
+		},
+	}
+	svc := NewConfluenceService(proc)
+
+	start := time.Now()
+	resp, err := svc.GetConfluence(context.Background(), &confluencev1.GetConfluenceRequest{Ticker: "SPY"})
+	if err != nil {
+		t.Fatalf("expected loading snapshot, got error: %v", err)
+	}
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("cold start should return immediately, took %s", time.Since(start))
+	}
+	if resp.OiStatus != string(pkgconfluence.OIStatusLoading) {
+		t.Fatalf("oi_status: got %q want loading", resp.OiStatus)
 	}
 }
 
@@ -252,6 +375,14 @@ func (b *blockingMockProcessor) OnSubscribe(context.Context, string, time.Time) 
 
 func (b *blockingMockProcessor) OnUnsubscribe(string) {}
 
+func (b *blockingMockProcessor) StopBackgroundWarmup(string) {}
+
+func (b *blockingMockProcessor) BootstrapInProgress(string) bool { return false }
+
+func (b *blockingMockProcessor) RecomputeIfReady(context.Context, string) (*pkgconfluence.ConfluenceSnapshot, bool) {
+	return nil, false
+}
+
 func (b *blockingMockProcessor) BootstrapSnapshot(context.Context, string) (*pkgconfluence.ConfluenceSnapshot, error) {
 	return nil, context.DeadlineExceeded
 }
@@ -267,7 +398,6 @@ func (b *blockingMockProcessor) RefreshSnapshotLive(context.Context, string) (*p
 func TestGetConfluence_subscribeThenSnapshot(t *testing.T) {
 	proc := &delayedMockProcessor{}
 	svc := NewConfluenceService(proc)
-	svc.timeout = 2 * time.Second
 
 	resp, err := svc.GetConfluence(context.Background(), &confluencev1.GetConfluenceRequest{Ticker: "TSLA"})
 	if err != nil {
@@ -311,6 +441,14 @@ func (d *delayedMockProcessor) OnUnsubscribe(string) {
 	d.unsubscribeCount++
 }
 
+func (d *delayedMockProcessor) StopBackgroundWarmup(string) {}
+
+func (d *delayedMockProcessor) BootstrapInProgress(string) bool { return false }
+
+func (d *delayedMockProcessor) RecomputeIfReady(context.Context, string) (*pkgconfluence.ConfluenceSnapshot, bool) {
+	return nil, false
+}
+
 func (d *delayedMockProcessor) BootstrapSnapshot(context.Context, string) (*pkgconfluence.ConfluenceSnapshot, error) {
 	return nil, context.DeadlineExceeded
 }
@@ -321,4 +459,70 @@ func (d *delayedMockProcessor) Watch(context.Context, string) (<-chan *pkgconflu
 
 func (d *delayedMockProcessor) RefreshSnapshotLive(context.Context, string) (*pkgconfluence.ConfluenceSnapshot, error) {
 	return nil, nil
+}
+
+func TestGetConfluenceSummary_secondQueryReturnsScoredAfterWarmup(t *testing.T) {
+	loading := &pkgconfluence.ConfluenceSnapshot{
+		Ticker:       "SNDK",
+		Spot:         1667.43,
+		OIStatus:     pkgconfluence.OIStatusLoading,
+		MarketStatus: pkgconfluence.MarketStatusOpen,
+		UpdatedAt:    time.Now().UTC(),
+	}
+	scored := &pkgconfluence.ConfluenceSnapshot{
+		Ticker:            "SNDK",
+		Spot:              1667.43,
+		Score:             58,
+		ReadinessBand:     pkgconfluence.ReadinessPossibleEntry,
+		OIStatus:          pkgconfluence.OIStatusReady,
+		MarketStatus:      pkgconfluence.MarketStatusOpen,
+		RSI:               31,
+		UpdatedAt:         time.Now().UTC(),
+		Levels:            pkgconfluence.Levels{GammaFlip: 1650, NearestSupport: 1645, HasNearestSupport: true},
+	}
+	proc := &warmupSequenceProcessor{
+		mockConfluenceProcessor: mockConfluenceProcessor{
+			snapshots: map[string]*pkgconfluence.ConfluenceSnapshot{"SNDK": loading},
+		},
+		scored: scored,
+	}
+	svc := NewConfluenceService(proc)
+	svc.oiWaitBudget = 50 * time.Millisecond
+
+	resp1, err := svc.GetConfluenceSummary(context.Background(), &confluencev1.GetConfluenceRequest{Ticker: "SNDK"})
+	if err != nil {
+		t.Fatalf("first query: %v", err)
+	}
+	if resp1.Verdict == nil || resp1.Verdict.Buy == nil || resp1.Verdict.Buy.Score != 0 {
+		t.Fatalf("first query should be partial/loading, got %+v", resp1.Verdict)
+	}
+
+	// Simulate background OI completing after the unary handler unsubscribed.
+	proc.snapshots["SNDK"] = scored
+
+	resp2, err := svc.GetConfluenceSummary(context.Background(), &confluencev1.GetConfluenceRequest{Ticker: "SNDK"})
+	if err != nil {
+		t.Fatalf("second query: %v", err)
+	}
+	if resp2.Verdict == nil || resp2.Verdict.Buy == nil || resp2.Verdict.Buy.Score != 58 {
+		t.Fatalf("second query should be scored, got %+v", resp2.Verdict)
+	}
+}
+
+type warmupSequenceProcessor struct {
+	mockConfluenceProcessor
+	scored *pkgconfluence.ConfluenceSnapshot
+}
+
+func (w *warmupSequenceProcessor) BootstrapInProgress(ticker string) bool {
+	snap, ok := w.snapshots[ticker]
+	return ok && snap != nil && snap.OIStatus == pkgconfluence.OIStatusLoading
+}
+
+func (w *warmupSequenceProcessor) RecomputeIfReady(_ context.Context, ticker string) (*pkgconfluence.ConfluenceSnapshot, bool) {
+	snap, ok := w.snapshots[ticker]
+	if !ok || snap == nil || snap.OIStatus != pkgconfluence.OIStatusReady {
+		return nil, false
+	}
+	return snap, true
 }

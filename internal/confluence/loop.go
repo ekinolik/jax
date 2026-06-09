@@ -9,17 +9,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ekinolik/jax/internal/polygon"
 	"github.com/ekinolik/jax/internal/stream"
 	pkgconfluence "github.com/ekinolik/jax/pkg/confluence"
 )
 
 const (
-	apiCallTimeout     = 30 * time.Second
 	greeksMaxInterval  = 5 * time.Minute
 	spotGreeksMovePct  = 0.005
 	idleGracePeriod    = 5 * time.Minute
 	pushDebouncePeriod = 30 * time.Second
 	cleanupInterval    = 30 * time.Second
+	processorShutdownWait = 10 * time.Second
 )
 
 type tickerRuntime struct {
@@ -36,6 +37,9 @@ type tickerRuntime struct {
 
 	lastPushFP string
 	lastPushAt time.Time
+
+	warmupRunning bool
+	warmupCancel  context.CancelFunc
 }
 
 func (p *Processor) apiCtx() (context.Context, context.CancelFunc) {
@@ -43,7 +47,24 @@ func (p *Processor) apiCtx() (context.Context, context.CancelFunc) {
 	if parent == nil {
 		parent = context.Background()
 	}
-	return context.WithTimeout(parent, apiCallTimeout)
+	return withAPITimeout(parent)
+}
+
+func (p *Processor) mergeContexts(primary, secondary context.Context) (context.Context, context.CancelFunc) {
+	if primary == nil {
+		primary = context.Background()
+	}
+	ctx, cancel := context.WithCancel(primary)
+	if secondary != nil {
+		go func() {
+			select {
+			case <-secondary.Done():
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
+	return ctx, cancel
 }
 
 // Start launches background loops for prefetch, idle cleanup, and RTH monitoring.
@@ -84,7 +105,18 @@ func (p *Processor) Stop() {
 	}
 	p.cancel()
 	p.stopAllTimers()
-	p.wg.Wait()
+
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(processorShutdownWait):
+		log.Printf("[confluence] processor background wait timed out after %s", processorShutdownWait)
+	}
+
 	p.cancel = nil
 	p.ctx = nil
 
@@ -593,10 +625,12 @@ func (p *Processor) activate(ctx context.Context, ticker string, now time.Time) 
 	if p.sectors != nil && p.sectors.DefaultSectorETF != "" {
 		defaultETF = p.sectors.DefaultSectorETF
 	}
-	if err := p.resolveSectorETF(ctx, ticker, rt); err != nil {
+	sectorCtx, sectorCancel := p.mergeContexts(ctx, p.ctx)
+	if err := p.resolveSectorETF(sectorCtx, ticker, rt); err != nil {
 		log.Printf("[confluence] sector resolve %s: %v (using default)", ticker, err)
 		rt.sectorETF = defaultETF
 	}
+	sectorCancel()
 	if rt.sectorETF == "" {
 		rt.sectorETF = defaultETF
 	}
@@ -620,11 +654,9 @@ func (p *Processor) activate(ctx context.Context, ticker string, now time.Time) 
 	}
 	p.SetSnapshot(ticker, snap)
 
-	oiCtx := p.ctx
-	if oiCtx == nil {
-		oiCtx = context.Background()
+	if !skipBackgroundWarmup(ctx) {
+		p.startBackgroundWarmup(ticker)
 	}
-	go p.ensureOI(oiCtx, ticker)
 
 	if open, _ := p.IsRTH(now); open {
 		p.startGreeksTimer(ticker)
@@ -649,6 +681,9 @@ func (p *Processor) resolveSectorETF(ctx context.Context, ticker string, rt *tic
 }
 
 func (p *Processor) ensureOI(ctx context.Context, ticker string) {
+	if ctx.Err() != nil {
+		return
+	}
 	if p.client == nil {
 		p.registry.SetOIState(ticker, pkgconfluence.OIStatusError)
 		return
@@ -673,7 +708,7 @@ func (p *Processor) ensureOI(ctx context.Context, ticker string) {
 		expirations, err = p.client.ResolveExpirations(ctx, ticker, p.settings.UsesDualExpiration(ticker), marketDate)
 		if err != nil {
 			log.Printf("[confluence] resolve expirations %s: %v", ticker, err)
-			p.registry.SetOIState(ticker, pkgconfluence.OIStatusError)
+			p.setOIStateFromCtx(ticker, ctx, pkgconfluence.OIStatusError)
 			return
 		}
 		p.tickerMu.Lock()
@@ -691,43 +726,101 @@ func (p *Processor) ensureOI(ctx context.Context, ticker string) {
 	if AllOIReady(p.oiCache, ticker, marketDate, expirations) {
 		p.registry.SetOIState(ticker, pkgconfluence.OIStatusReady)
 		if open, _ := p.IsRTH(now); open {
-			p.triggerImmediateRecompute(ticker)
+			greeksCtx, greeksCancel := withAPITimeout(ctx)
+			if err := p.refreshGreeks(greeksCtx, ticker); err != nil {
+				log.Printf("[confluence] greeks after cached OI %s: %v", ticker, err)
+			}
+			greeksCancel()
+			p.recomputeSnapshotNow(ctx, ticker)
 		}
 		return
 	}
 
 	p.registry.SetOIState(ticker, pkgconfluence.OIStatusLoading)
 
-	spot, err := p.spotFor(ctx, ticker)
+	spotCtx, spotCancel := withAPITimeout(ctx)
+	spot, err := p.spotFor(spotCtx, ticker)
+	spotCancel()
 	if err != nil || spot <= 0 {
-		p.registry.SetOIState(ticker, pkgconfluence.OIStatusLoading)
+		log.Printf("[confluence] spot for OI %s: %v", ticker, err)
+		p.setOIStateFromCtx(ticker, ctx, pkgconfluence.OIStatusError)
 		return
 	}
 	strikeLow, strikeHigh := StrikeBand(spot)
 
 	for _, exp := range expirations {
+		if ctx.Err() != nil {
+			return
+		}
 		expStr := exp.Format("2006-01-02")
 		if p.oiCache != nil && p.oiCache.HasOI(ticker, marketDate, expStr) {
 			continue
 		}
-		if _, err := FetchOISlice(ctx, p.client, p.oiCache, p.settings, ticker, expStr, marketDate, strikeLow, strikeHigh); err != nil {
-			log.Printf("[confluence] OI fetch %s %s: %v", ticker, expStr, err)
-			p.registry.SetOIState(ticker, pkgconfluence.OIStatusError)
+		if err := p.fetchOISliceWithRetry(ctx, ticker, expStr, marketDate, strikeLow, strikeHigh); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			if polygon.IsRateLimitError(err) {
+				log.Printf("[confluence] OI fetch %s %s: Massive rate limit (429) after retries: %v", ticker, expStr, err)
+			} else {
+				log.Printf("[confluence] OI fetch %s %s: %v", ticker, expStr, err)
+			}
+			p.setOIStateFromCtx(ticker, ctx, pkgconfluence.OIStatusError)
 			return
 		}
 	}
 
 	p.registry.SetOIState(ticker, pkgconfluence.OIStatusReady)
 	if open, _ := p.IsRTH(now); open {
-		if err := p.refreshGreeks(ctx, ticker); err != nil {
+		greeksCtx, greeksCancel := withAPITimeout(ctx)
+		if err := p.refreshGreeks(greeksCtx, ticker); err != nil {
 			log.Printf("[confluence] greeks after OI %s: %v", ticker, err)
 		}
-		p.triggerImmediateRecompute(ticker)
+		greeksCancel()
+		p.recomputeSnapshotNow(ctx, ticker)
 	}
+}
+
+func (p *Processor) setOIStateFromCtx(ticker string, ctx context.Context, state pkgconfluence.OIStatus) {
+	if ctx.Err() != nil {
+		return
+	}
+	p.registry.SetOIState(ticker, state)
+	p.patchSnapshotOIStatus(ticker, state)
+}
+
+func (p *Processor) fetchOISliceWithRetry(
+	ctx context.Context,
+	ticker, expiration string,
+	marketDate time.Time,
+	strikeLow, strikeHigh float64,
+) error {
+	retry := polygon.DefaultRetryConfig()
+	if p.settings != nil {
+		retry = polygon.RetryConfig{
+			MaxRetries:  p.settings.APIRetry.MaxRetries,
+			BaseDelayMs: p.settings.APIRetry.BaseDelayMs,
+		}
+	}
+	_, err := FetchOISliceWithRetry(ctx, p.client, p.oiCache, p.settings, retry, ticker, expiration, marketDate, strikeLow, strikeHigh)
+	return err
+}
+
+func (p *Processor) patchSnapshotOIStatus(ticker string, oiStatus pkgconfluence.OIStatus) {
+	snap, ok := p.LatestSnapshot(ticker)
+	if !ok || snap == nil {
+		return
+	}
+	updated := *snap
+	updated.OIStatus = oiStatus
+	updated.UpdatedAt = time.Now().UTC()
+	p.SetSnapshot(ticker, &updated)
 }
 
 func (p *Processor) deactivateTicker(ticker string) {
 	ticker = pkgconfluence.NormalizeTicker(ticker)
+
+	p.stopBackgroundWarmup(ticker)
 
 	p.tickerMu.Lock()
 	rt, ok := p.tickers[ticker]

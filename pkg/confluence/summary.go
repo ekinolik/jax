@@ -469,6 +469,10 @@ func buildWarnings(snap ConfluenceSnapshot) []string {
 	if (snap.RiskReward > 0 && snap.RiskReward < 1) || downsideAgainst {
 		warnings = appendUnique(warnings, "Poor risk/reward — downside exceeds upside")
 	}
+	if snap.TradePlan != nil && snap.ReadinessBand == ReadinessCaution &&
+		snap.RiskReward > 0 && snap.RiskReward < 1 {
+		warnings = appendUnique(warnings, "Single entry recommended — poor R/R")
+	}
 
 	if snap.Levels.HasNearestResistance && snap.UpsidePct > 0 && snap.UpsidePct < defaultMinUpsidePct {
 		warnings = append(warnings, "Upside room below 3% minimum — readiness capped")

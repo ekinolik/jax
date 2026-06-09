@@ -3,7 +3,6 @@ package confluence
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -143,11 +142,7 @@ func (p *Processor) Watch(ctx context.Context, ticker string) (<-chan *pkgconflu
 	}
 
 	if snap, ok := p.LatestSnapshot(ticker); !ok || SnapshotNeedsBootstrap(snap) {
-		bootstrapCtx, cancel := context.WithTimeout(ctx, bootstrapTimeout)
-		if _, err := p.BootstrapSnapshot(bootstrapCtx, ticker); err != nil {
-			log.Printf("[confluence] bootstrap watch %s: %v", ticker, err)
-		}
-		cancel()
+		p.startBackgroundWarmup(ticker)
 	}
 
 	ch := make(chan *pkgconfluence.ConfluenceSnapshot, 4)
